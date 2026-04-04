@@ -27,9 +27,9 @@ defmodule EventBus.EventSource do
   and `:occurred_at` fields when they are not provided in the params.
   """
   defmacro build(params, do: yield) do
-    quote do
+    quote generated: true do
       initialized_at = MonotonicTime.now()
-      params = unquote(params)
+      params = :maps.merge(%{}, unquote(params))
 
       {topic, data} =
         case unquote(yield) do
