@@ -157,6 +157,28 @@ defmodule EventBus do
     as: :subscribe
 
   @doc """
+  Subscribe a subscriber with options.
+
+  Supported options:
+
+    * `:priority` - integer, higher runs first (default `0`)
+    * `:guard` - 1-arity function receiving `%Event{}`, return truthy to dispatch
+
+  ## Examples
+
+      EventBus.subscribe({MySubscriber, ["order_.*"]},
+        guard: fn event -> event.data.amount > 1000 end,
+        priority: 100
+      )
+      :ok
+
+  """
+  @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
+  defdelegate subscribe(subscriber_with_topic_patterns, opts),
+    to: Subscription,
+    as: :subscribe
+
+  @doc """
   Subscribe a subscriber that auto-unsubscribes after one terminal event.
 
   ## Examples

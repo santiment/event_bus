@@ -8,6 +8,7 @@ defmodule EventBus.Service.Subscription do
   @app :event_bus
   @namespace :subscriptions
   @limits_table :eb_subscription_limits
+  @opts_table :eb_subscription_opts
 
   @typep subscriber :: EventBus.subscriber()
   @typep subscribers :: EventBus.subscribers()
@@ -21,16 +22,18 @@ defmodule EventBus.Service.Subscription do
   end
 
   @doc false
-  @spec setup_limits_table() :: :ok
-  def setup_limits_table do
-    if :ets.info(@limits_table) == :undefined do
-      :ets.new(@limits_table, [
-        :set,
-        :public,
-        :named_table,
-        {:write_concurrency, true},
-        {:read_concurrency, true}
-      ])
+  @spec setup_tables() :: :ok
+  def setup_tables do
+    for table <- [@limits_table, @opts_table] do
+      if :ets.info(table) == :undefined do
+        :ets.new(table, [
+          :set,
+          :public,
+          :named_table,
+          {:write_concurrency, true},
+          {:read_concurrency, true}
+        ])
+      end
     end
 
     :ok
@@ -41,6 +44,7 @@ defmodule EventBus.Service.Subscription do
   def subscribe({subscriber, topics}) do
     Debug.log("subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}")
     clear_limit(subscriber)
+    clear_opts(subscriber)
     {subscribers, topic_map} = load_state()
     subscribers = add_or_update_subscriber(subscribers, {subscriber, topics})
 
@@ -50,6 +54,14 @@ defmodule EventBus.Service.Subscription do
       |> Enum.into(%{})
 
     save_state({subscribers, topic_map})
+  end
+
+  @doc false
+  @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
+  def subscribe({subscriber, topics}, opts) when is_list(opts) do
+    subscribe({subscriber, topics})
+    store_opts(subscriber, opts)
+    :ok
   end
 
   @doc false
@@ -83,6 +95,7 @@ defmodule EventBus.Service.Subscription do
   def unsubscribe(subscriber) do
     Debug.log("unsubscribe subscriber=#{inspect(subscriber)}")
     clear_limit(subscriber)
+    clear_opts(subscriber)
     {subscribers, topic_map} = load_state()
     subscribers = List.keydelete(subscribers, subscriber, 0)
 
@@ -174,5 +187,29 @@ defmodule EventBus.Service.Subscription do
     end
 
     :ok
+  end
+
+  defp store_opts(subscriber, opts) do
+    priority = Keyword.get(opts, :priority, 0)
+    guard = Keyword.get(opts, :guard)
+    :ets.insert(@opts_table, {subscriber, %{priority: priority, guard: guard}})
+    :ok
+  end
+
+  defp clear_opts(subscriber) do
+    if :ets.info(@opts_table) != :undefined do
+      :ets.delete(@opts_table, subscriber)
+    end
+
+    :ok
+  end
+
+  @doc false
+  @spec fetch_opts(term()) :: %{priority: integer(), guard: function() | nil}
+  def fetch_opts(subscriber) do
+    case :ets.lookup(@opts_table, subscriber) do
+      [{^subscriber, opts}] -> opts
+      [] -> %{priority: 0, guard: nil}
+    end
   end
 end

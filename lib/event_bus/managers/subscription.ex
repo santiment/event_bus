@@ -44,6 +44,14 @@ defmodule EventBus.Manager.Subscription do
   end
 
   @doc """
+  Subscribe the subscriber to topic_patterns with options (guard, priority)
+  """
+  @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
+  def subscribe({subscriber, topic_patterns}, opts) do
+    GenServer.call(__MODULE__, {:subscribe_with_opts, {subscriber, topic_patterns}, opts})
+  end
+
+  @doc """
   Subscribe the subscriber, auto-unsubscribe after one terminal event
   """
   @spec subscribe_once(subscriber_with_topic_patterns()) :: :ok
@@ -133,6 +141,12 @@ defmodule EventBus.Manager.Subscription do
   @doc false
   def handle_call({:subscribe_n, {subscriber, topic_patterns}, count}, _from, state) do
     @backend.subscribe_n({subscriber, topic_patterns}, count)
+    {:reply, :ok, state}
+  end
+
+  @doc false
+  def handle_call({:subscribe_with_opts, {subscriber, topic_patterns}, opts}, _from, state) do
+    @backend.subscribe({subscriber, topic_patterns}, opts)
     {:reply, :ok, state}
   end
 

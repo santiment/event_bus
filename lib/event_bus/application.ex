@@ -16,7 +16,7 @@ defmodule EventBus.Application do
 
   def start(_type, _args) do
     Debug.setup_table()
-    SubscriptionService.setup_limits_table()
+    SubscriptionService.setup_tables()
 
     children = [
       Topic,
