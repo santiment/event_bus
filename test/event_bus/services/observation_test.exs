@@ -1,6 +1,8 @@
 defmodule EventBus.Service.ObservationTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias EventBus.Service.{Observation, Topic}
 
   alias EventBus.Support.Helper.{
@@ -70,7 +72,9 @@ defmodule EventBus.Service.ObservationTest do
 
     Observation.register_topic(topic)
 
-    assert nil == Observation.fetch({topic, id})
+    capture_log(fn ->
+      assert nil == Observation.fetch({topic, id})
+    end)
   end
 
   test "complete" do
@@ -189,9 +193,13 @@ defmodule EventBus.Service.ObservationTest do
     Observation.mark_as_completed({subscriber, {topic, id}})
 
     # Event should be cleaned up since the sole subscriber completed
-    assert nil == Observation.fetch({topic, id})
+    capture_log(fn ->
+      assert nil == Observation.fetch({topic, id})
+    end)
 
-    # Second call should be a no-op
-    Observation.mark_as_completed({subscriber, {topic, id}})
+    # Second call should be a no-op (fetch inside returns nil, may log)
+    capture_log(fn ->
+      Observation.mark_as_completed({subscriber, {topic, id}})
+    end)
   end
 end

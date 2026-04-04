@@ -1,6 +1,8 @@
 defmodule EventBus.Manager.NotificationTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias EventBus.Manager.Notification
   alias EventBus.Model.Event
 
@@ -21,6 +23,8 @@ defmodule EventBus.Manager.NotificationTest do
   end
 
   test "notify" do
-    assert :ok == Notification.notify(@event)
+    capture_log(fn ->
+      assert :ok == Notification.notify(@event)
+    end)
   end
 end

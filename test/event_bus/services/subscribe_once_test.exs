@@ -1,6 +1,8 @@
 defmodule EventBus.Service.SubscribeOnceTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias EventBus.Model.Event
 
   @topic :subscribe_once_topic
@@ -61,7 +63,10 @@ defmodule EventBus.Service.SubscribeOnceTest do
     assert [] == EventBus.subscribers()
 
     # Second event should not be received
-    notify_and_wait("once-2")
+    capture_log(fn ->
+      notify_and_wait("once-2")
+    end)
+
     refute_received {:processed, OnceSubscriber, @topic, "once-2"}
   end
 
@@ -83,7 +88,10 @@ defmodule EventBus.Service.SubscribeOnceTest do
     Process.sleep(100)
     assert [] == EventBus.subscribers()
 
-    notify_and_wait("n-4")
+    capture_log(fn ->
+      notify_and_wait("n-4")
+    end)
+
     refute_received {:processed, CountingSubscriber, @topic, "n-4"}
   end
 
@@ -153,7 +161,10 @@ defmodule EventBus.Service.SubscribeOnceTest do
 
     EventBus.subscribe_once({CrashOnceSubscriber, ["subscribe_once_topic"]})
 
-    notify_and_wait("crash-1")
+    capture_log(fn ->
+      notify_and_wait("crash-1")
+    end)
+
     assert_received {:crash_attempt, @topic, "crash-1"}
 
     # Should be unsubscribed because the crash caused a skip which decremented

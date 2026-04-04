@@ -129,11 +129,13 @@ defmodule EventBus.RegressionTest do
         data: %{test: true}
       }
 
-      Notification.notify(event)
-      Process.sleep(200)
+      capture_log(fn ->
+        Notification.notify(event)
+        Process.sleep(200)
 
-      # Event should be cleaned up (all subscribers processed = skipped)
-      assert EventBus.fetch_event({@topic, "regression-169-skip"}) == nil
+        # Event should be cleaned up (all subscribers processed = skipped)
+        assert EventBus.fetch_event({@topic, "regression-169-skip"}) == nil
+      end)
     end
   end
 

@@ -66,7 +66,9 @@ defmodule EventBus.Service.GuardTest do
     refute_received {:processed, PassingSubscriber, @topic, "guard-skip-1"}
 
     # Event should be cleaned up (subscriber was skipped)
-    assert EventBus.fetch_event({@topic, "guard-skip-1"}) == nil
+    capture_log(fn ->
+      assert EventBus.fetch_event({@topic, "guard-skip-1"}) == nil
+    end)
   end
 
   test "guard receives the full event struct" do
@@ -108,11 +110,14 @@ defmodule EventBus.Service.GuardTest do
       guard: fn _event -> raise "guard error" end
     )
 
-    notify_and_wait("guard-raise-1")
-    refute_received {:processed, PassingSubscriber, @topic, "guard-raise-1"}
+    capture_log(fn ->
+      notify_and_wait("guard-raise-1")
 
-    # Event should be cleaned up
-    assert EventBus.fetch_event({@topic, "guard-raise-1"}) == nil
+      refute_received {:processed, PassingSubscriber, @topic, "guard-raise-1"}
+
+      # Event should be cleaned up
+      assert EventBus.fetch_event({@topic, "guard-raise-1"}) == nil
+    end)
   end
 
   test "guard that raises does not stop later subscribers" do

@@ -1,5 +1,8 @@
 defmodule EventBus.EventSourceTest do
   use ExUnit.Case
+
+  import ExUnit.CaptureLog
+
   use EventBus.EventSource
 
   doctest EventSource
@@ -108,11 +111,13 @@ defmodule EventBus.EventSourceTest do
     topic = :user_created
     data = %{id: 1, name: "me", email: "me@example.com"}
 
-    result =
-      EventSource.notify %{id: id, topic: topic} do
-        data
-      end
+    capture_log(fn ->
+      result =
+        EventSource.notify %{id: id, topic: topic} do
+          data
+        end
 
-    assert result == data
+      assert result == data
+    end)
   end
 end

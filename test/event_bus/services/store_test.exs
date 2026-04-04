@@ -1,5 +1,8 @@
 defmodule EventBus.Service.StoreTest do
   use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
+
   alias EventBus.Model.Event
   alias EventBus.Service.Store
 
@@ -103,6 +106,8 @@ defmodule EventBus.Service.StoreTest do
     :ok = Store.create(event)
     Store.delete({topic, event.id})
 
-    assert is_nil(Store.fetch({topic, event.id}))
+    capture_log(fn ->
+      assert is_nil(Store.fetch({topic, event.id}))
+    end)
   end
 end

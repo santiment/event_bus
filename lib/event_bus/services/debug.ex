@@ -16,6 +16,13 @@ defmodule EventBus.Service.Debug do
   @spec toggle(boolean()) :: :ok
   def toggle(enabled) when is_boolean(enabled) do
     Application.put_env(@app, :debug, enabled, persistent: true)
+
+    if enabled do
+      Logger.put_module_level(__MODULE__, :debug)
+    else
+      Logger.delete_module_level(__MODULE__)
+    end
+
     :ok
   end
 

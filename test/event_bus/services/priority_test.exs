@@ -145,8 +145,10 @@ defmodule EventBus.Service.PriorityTest do
     refute_received {:processed, :after_cancel}
 
     # Event should be cleaned up (canceller completed, after_cancel skipped)
-    Process.sleep(100)
-    assert EventBus.fetch_event({@topic, "cancel-return-1"}) == nil
+    capture_log(fn ->
+      Process.sleep(100)
+      assert EventBus.fetch_event({@topic, "cancel-return-1"}) == nil
+    end)
   end
 
   test "return-value cancellation cleans up even without explicit completion" do
@@ -160,8 +162,10 @@ defmodule EventBus.Service.PriorityTest do
     assert_received {:processed, :implicit_canceller}
     refute_received {:processed, :after_cancel}
 
-    Process.sleep(100)
-    assert EventBus.fetch_event({@topic, "cancel-return-implicit-1"}) == nil
+    capture_log(fn ->
+      Process.sleep(100)
+      assert EventBus.fetch_event({@topic, "cancel-return-implicit-1"}) == nil
+    end)
   end
 
   test "cancellation via CancelEvent exception stops propagation" do
@@ -172,14 +176,14 @@ defmodule EventBus.Service.PriorityTest do
 
     capture_log(fn ->
       notify_and_wait("cancel-raise-1")
+
+      assert_received {:processed, :raise_canceller}
+      refute_received {:processed, :after_cancel}
+
+      # Event should be cleaned up (raiser skipped by cancellation, after_cancel skipped)
+      Process.sleep(100)
+      assert EventBus.fetch_event({@topic, "cancel-raise-1"}) == nil
     end)
-
-    assert_received {:processed, :raise_canceller}
-    refute_received {:processed, :after_cancel}
-
-    # Event should be cleaned up (raiser skipped by cancellation, after_cancel skipped)
-    Process.sleep(100)
-    assert EventBus.fetch_event({@topic, "cancel-raise-1"}) == nil
   end
 
   test "non-cancelling error does not stop propagation" do
