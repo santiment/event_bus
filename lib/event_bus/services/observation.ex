@@ -46,10 +46,14 @@ defmodule EventBus.Service.Observation do
   def mark_as_completed({subscriber, event_shadow}) do
     case fetch(event_shadow) do
       {subscribers, completers, skippers} ->
-        save_or_delete(
-          event_shadow,
-          {subscribers, [subscriber | completers], skippers}
-        )
+        if subscriber in completers or subscriber in skippers do
+          :ok
+        else
+          save_or_delete(
+            event_shadow,
+            {subscribers, [subscriber | completers], skippers}
+          )
+        end
 
       nil ->
         :ok
@@ -61,10 +65,14 @@ defmodule EventBus.Service.Observation do
   def mark_as_skipped({subscriber, event_shadow}) do
     case fetch(event_shadow) do
       {subscribers, completers, skippers} ->
-        save_or_delete(
-          event_shadow,
-          {subscribers, completers, [subscriber | skippers]}
-        )
+        if subscriber in completers or subscriber in skippers do
+          :ok
+        else
+          save_or_delete(
+            event_shadow,
+            {subscribers, completers, [subscriber | skippers]}
+          )
+        end
 
       nil ->
         :ok
