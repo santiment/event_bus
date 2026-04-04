@@ -16,10 +16,6 @@ defmodule EventBus.Service.PriorityTest do
     EventBus.register_topic(@topic)
 
     on_exit(fn ->
-      for {subscriber, _} <- EventBus.subscribers() do
-        EventBus.unsubscribe(subscriber)
-      end
-
       Process.sleep(100)
       EventBus.unregister_topic(@topic)
     end)

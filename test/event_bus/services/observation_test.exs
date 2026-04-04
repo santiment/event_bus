@@ -179,9 +179,9 @@ defmodule EventBus.Service.ObservationTest do
     subscriber = {InputLogger, %{}}
     subscribers = [subscriber]
 
-    # Register both store and observation tables since cleanup deletes from store
-    EventBus.Service.Store.register_topic(topic)
-    Observation.register_topic(topic)
+    # Register through the full Topic flow so ETS tables are owned by
+    # long-lived GenServers, not the test process.
+    Topic.register(topic)
     Observation.save({topic, id}, {subscribers, [], []})
 
     # Without idempotency fix, the second call would add a duplicate

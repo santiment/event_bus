@@ -6,7 +6,6 @@ defmodule EventBus.Service.Observation do
   alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Service.Debug
   alias EventBus.Service.Subscription, as: SubscriptionService
-  alias :ets, as: Ets
 
   @typep event_shadow :: EventBus.event_shadow()
   @typep subscribers :: EventBus.subscribers()
@@ -32,14 +31,14 @@ defmodule EventBus.Service.Observation do
   @doc false
   @spec register_topic(topic()) :: :ok
   def register_topic(topic) do
-    if !exist?(topic), do: Ets.new(table_name(topic), @ets_opts)
+    if !exist?(topic), do: :ets.new(table_name(topic), @ets_opts)
     :ok
   end
 
   @doc false
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
-    if exist?(topic), do: Ets.delete(table_name(topic))
+    if exist?(topic), do: :ets.delete(table_name(topic))
     :ok
   end
 
@@ -91,7 +90,7 @@ defmodule EventBus.Service.Observation do
   @spec fetch(event_shadow()) ::
           {subscribers(), subscribers(), subscribers()} | nil
   def fetch({topic, id}) do
-    case Ets.lookup(table_name(topic), id) do
+    case :ets.lookup(table_name(topic), id) do
       [{_, data}] ->
         data
 
@@ -120,7 +119,7 @@ defmodule EventBus.Service.Observation do
     if complete?(watcher) do
       delete_with_relations({topic, id})
     else
-      Ets.insert(table_name(topic), {id, watcher})
+      :ets.insert(table_name(topic), {id, watcher})
     end
 
     :ok
@@ -131,7 +130,7 @@ defmodule EventBus.Service.Observation do
     Debug.log("cleaned topic=#{inspect(topic)} id=#{inspect(id)}")
     Debug.clean_dispatch_metadata(topic, id)
     StoreManager.delete({topic, id})
-    Ets.delete(table_name(topic), id)
+    :ets.delete(table_name(topic), id)
 
     :ok
   end

@@ -20,11 +20,6 @@ defmodule EventBus.Service.DebugTest do
 
     on_exit(fn ->
       Debug.toggle(false)
-
-      for {subscriber, _} <- EventBus.subscribers() do
-        EventBus.unsubscribe(subscriber)
-      end
-
       Process.sleep(100)
       EventBus.unregister_topic(@topic)
     end)
