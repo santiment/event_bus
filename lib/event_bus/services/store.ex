@@ -16,15 +16,13 @@ defmodule EventBus.Service.Store do
   @doc false
   @spec exist?(topic()) :: boolean()
   def exist?(topic) do
-    table_name = table_name(topic)
-    all_tables = Ets.all()
-    Enum.any?(all_tables, fn table -> table == table_name end)
+    :ets.info(table_name(topic)) != :undefined
   end
 
   @doc false
   @spec register_topic(topic()) :: :ok
   def register_topic(topic) do
-    unless exist?(topic), do: Ets.new(table_name(topic), @ets_opts)
+    if !exist?(topic), do: Ets.new(table_name(topic), @ets_opts)
     :ok
   end
 
@@ -39,7 +37,9 @@ defmodule EventBus.Service.Store do
   @spec fetch(event_shadow()) :: event() | nil
   def fetch({topic, id}) do
     case Ets.lookup(table_name(topic), id) do
-      [{_, %Event{} = event}] -> event
+      [{_, %Event{} = event}] ->
+        event
+
       _ ->
         Logger.log(:info, fn ->
           "[EVENTBUS][STORE]\s#{topic}.#{id}.ets_fetch_error"

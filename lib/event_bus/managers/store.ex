@@ -19,13 +19,13 @@ defmodule EventBus.Manager.Store do
   @backend StoreService
 
   @doc false
-  def start_link do
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc false
-  def init(args) do
-    {:ok, args}
+  def init(_opts) do
+    {:ok, nil}
   end
 
   @doc """
@@ -95,35 +95,35 @@ defmodule EventBus.Manager.Store do
   ###########################################################################
 
   @doc false
-  @spec handle_call({:register_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:register_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:register_topic, topic}, _from, state) do
     @backend.register_topic(topic)
     {:reply, :ok, state}
   end
 
-  @spec handle_call({:unregister_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:unregister_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:unregister_topic, topic}, _from, state) do
     @backend.unregister_topic(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:exist?, topic()}, any(), term())
-    :: {:reply, boolean(), term()}
+  @spec handle_call({:exist?, topic()}, any(), term()) ::
+          {:reply, boolean(), term()}
   def handle_call({:exist?, topic}, _from, state) do
     {:reply, @backend.exist?(topic), state}
   end
 
   @doc false
-  @spec handle_call({:create, event()}, any(), term()) :: no_return()
+  @spec handle_call({:create, event()}, any(), term()) :: {:reply, :ok, term()}
   def handle_call({:create, event}, _from, state) do
     @backend.create(event)
     {:reply, :ok, state}
   end
 
-  @spec handle_cast({:delete, event_shadow()}, term()) :: no_return()
+  @spec handle_cast({:delete, event_shadow()}, term()) :: {:noreply, term()}
   def handle_cast({:delete, {topic, id}}, state) do
     @backend.delete({topic, id})
     {:noreply, state}

@@ -70,7 +70,8 @@ defmodule EventBus.Manager.ObservationTest do
     assert :ok === Observation.mark_as_completed({subscriber, {topic, id}})
 
     # With an open tuple
-    assert :ok === Observation.mark_as_completed({another_subscriber, topic, id})
+    assert :ok ===
+             Observation.mark_as_completed({another_subscriber, topic, id})
   end
 
   test "skip" do

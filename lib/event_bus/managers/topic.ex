@@ -15,13 +15,13 @@ defmodule EventBus.Manager.Topic do
   @backend TopicService
 
   @doc false
-  def start_link do
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc false
-  def init(args) do
-    {:ok, args}
+  def init(_opts) do
+    {:ok, nil}
   end
 
   @doc """
@@ -75,22 +75,23 @@ defmodule EventBus.Manager.Topic do
   ###########################################################################
 
   @doc false
-  @spec handle_call({:exist?, topic()}, any(), term())
-    :: {:reply, boolean(), term()}
+  @spec handle_call({:exist?, topic()}, any(), term()) ::
+          {:reply, boolean(), term()}
   def handle_call({:exist?, topic}, _from, state) do
     {:reply, @backend.exist?(topic), state}
   end
 
   @doc false
-  @spec handle_call({:register, topic()}, any(), term()) :: {:reply, :ok, term()}
+  @spec handle_call({:register, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:register, topic}, _from, state) do
     @backend.register(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:unregister, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:unregister, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:unregister, topic}, _from, state) do
     @backend.unregister(topic)
     {:reply, :ok, state}

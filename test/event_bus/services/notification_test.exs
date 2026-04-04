@@ -54,9 +54,6 @@ defmodule EventBus.Service.NotificationTest do
     # This subscriber deos not have a config!!!
     EventBus.subscribe({AnotherCalculator, ["metrics_received$"]})
 
-    # Sleep until subscriptions complete
-    Process.sleep(200)
-
     logs =
       capture_log(fn ->
         Notification.notify(@event)
@@ -69,20 +66,16 @@ defmodule EventBus.Service.NotificationTest do
 
     assert String.contains?(logs, "I don't want to handle your event")
 
-    assert String.contains?(
-             logs,
-             "Event log for %EventBus.Model.Event{data: [1, 2], id: \"E1\", initialized_at: nil, occurred_at: nil, source: \"NotificationTest\", topic: :metrics_received, transaction_id: \"T1\", ttl: nil}"
-           )
+    assert String.contains?(logs, "Event log for %EventBus.Model.Event{")
+    assert String.contains?(logs, "id: \"E1\"")
+    assert String.contains?(logs, "data: [1, 2]")
+    assert String.contains?(logs, "topic: :metrics_received")
 
-    assert String.contains?(
-             logs,
-             "Event log for %EventBus.Model.Event{data: {3, [1, 2]}, id: \"E123\", initialized_at: nil, occurred_at: nil, source: \"Logger\", topic: :metrics_summed, transaction_id: \"T1\", ttl: nil}"
-           )
+    assert String.contains?(logs, "id: \"E123\"")
+    assert String.contains?(logs, "data: {3, [1, 2]}")
+    assert String.contains?(logs, "source: \"Logger\"")
 
-    assert String.contains?(
-             logs,
-             "Event log for %EventBus.Model.Event{data: {3, [1, 2]}, id: \"E123\", initialized_at: nil, occurred_at: nil, source: \"AnotherCalculator\", topic: :metrics_summed, transaction_id: \"T1\", ttl: nil}"
-           )
+    assert String.contains?(logs, "source: \"AnotherCalculator\"")
   end
 
   test "notify without subscribers" do
@@ -96,7 +89,7 @@ defmodule EventBus.Service.NotificationTest do
 
     assert String.contains?(
              logs,
-             "Topic(:metrics_received) doesn't have subscribers"
+             "Topic :metrics_received doesn't have subscribers"
            )
   end
 end

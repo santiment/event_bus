@@ -1,4 +1,4 @@
-defmodule EventBus.Mixfile do
+defmodule EventBus.MixProject do
   use Mix.Project
 
   @source_url "https://github.com/otobus/event_bus"
@@ -8,9 +8,8 @@ defmodule EventBus.Mixfile do
     [
       app: :event_bus,
       version: @version,
-      elixir: "~> 1.5",
+      elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
-      build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
       package: package(),
       deps: deps(),
@@ -21,7 +20,6 @@ defmodule EventBus.Mixfile do
   end
 
   def application do
-    # Specify extra applications you'll use from Erlang/Elixir
     [
       extra_applications: [:logger, :crypto],
       mod: {EventBus.Application, []}
@@ -38,10 +36,11 @@ defmodule EventBus.Mixfile do
 
   defp deps do
     [
-      {:credo, "~> 1.6", only: [:dev, :test]},
-      {:dialyxir, "~> 1.0", only: [:dev, :test], runtime: false},
-      {:excoveralls, "~> 0.13", only: [:test]},
-      {:ex_doc, ">= 0.0.0", only: [:dev], runtime: false}
+      {:telemetry, "~> 0.4 or ~> 1.0", optional: true},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:excoveralls, "~> 0.18", only: [:test], runtime: false},
+      {:ex_doc, "~> 0.34", only: [:dev], runtime: false}
     ]
   end
 

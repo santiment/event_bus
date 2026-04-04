@@ -41,7 +41,10 @@ defmodule EventBus.EventSource do
         end
 
       eb_ttl = Application.get_env(@eb_app, :ttl)
-      eb_id_gen = Application.get_env(@eb_app, :id_generator, Base62)
+
+      eb_id_gen =
+        Application.get_env(@eb_app, :id_generator, EventBus.Util.Base62)
+
       id = Map.get(params, :id, eb_id_gen.unique_id())
 
       %Event{

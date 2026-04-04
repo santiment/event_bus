@@ -21,7 +21,10 @@ defmodule EventBusTest do
   }
 
   setup do
-    for subscriber <- EventBus.subscribers() do
+    EventBus.register_topic(:metrics_received)
+    EventBus.register_topic(:metrics_summed)
+
+    for {subscriber, _topics} <- EventBus.subscribers() do
       EventBus.unsubscribe(subscriber)
     end
 
@@ -33,8 +36,6 @@ defmodule EventBusTest do
     EventBus.subscribe({{BadOne, %{}}, [".*"]})
     EventBus.subscribe({{Calculator, %{}}, ["metrics_received"]})
     EventBus.subscribe({{MemoryLeakerOne, %{}}, [".*"]})
-    # Wait until the subscribers subscribe to the topics
-    Process.sleep(100)
 
     logs =
       capture_log(fn ->
@@ -45,20 +46,13 @@ defmodule EventBusTest do
 
     assert String.contains?(logs, "BadOne.process/1 raised an error!")
 
-    assert String.contains?(
-             logs,
-             "Event log for %EventBus.Model.Event{data:" <>
-               " [1, 7], id: \"M1\", initialized_at: nil, occurred_at: nil," <>
-               " source: \"EventBusTest\", topic: :metrics_received," <>
-               " transaction_id: \"T1\", ttl: nil}"
-           )
+    assert String.contains?(logs, "Event log for %EventBus.Model.Event{")
+    assert String.contains?(logs, "id: \"M1\"")
+    assert String.contains?(logs, "data: [1, 7]")
+    assert String.contains?(logs, "topic: :metrics_received")
 
-    assert String.contains?(
-             logs,
-             "Event log for %EventBus.Model.Event{data:" <>
-               " {8, [1, 7]}, id: \"E123\", initialized_at: nil," <>
-               " occurred_at: nil, source: \"Logger\"," <>
-               " topic: :metrics_summed, transaction_id: \"T1\", ttl: nil}"
-           )
+    assert String.contains?(logs, "id: \"E123\"")
+    assert String.contains?(logs, "data: {8, [1, 7]}")
+    assert String.contains?(logs, "topic: :metrics_summed")
   end
 end

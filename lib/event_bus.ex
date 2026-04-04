@@ -240,7 +240,7 @@ defmodule EventBus do
   ## Examples
 
       EventBus.fetch_event({:hello_received, "123"})
-      %EventBus.Model.Model{}
+      %EventBus.Model.Event{}
 
   """
   @spec fetch_event(event_shadow()) :: event() | nil

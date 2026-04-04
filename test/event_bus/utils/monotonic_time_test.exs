@@ -14,7 +14,8 @@ defmodule EventBus.Util.MonotonicTimeTest do
   test "now does not change init_time configuration on multiple calls" do
     # First call
     MonotonicTime.now()
-    init_time = Application.get_env(:event_bus, :init_time) # init_time
+    # init_time
+    init_time = Application.get_env(:event_bus, :init_time)
 
     # Second call
     MonotonicTime.now()

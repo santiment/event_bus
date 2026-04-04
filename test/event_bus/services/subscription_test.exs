@@ -17,19 +17,16 @@ defmodule EventBus.Service.SubscriptionTest do
       Subscription.unregister_topic(:auto_subscribed)
       Subscription.unregister_topic(:metrics_received)
       Subscription.unregister_topic(:metrics_summed)
-      Process.sleep(100)
     end)
 
     Subscription.register_topic(:auto_subscribed)
     Subscription.register_topic(:metrics_received)
     Subscription.register_topic(:metrics_summed)
-    Process.sleep(100)
 
     for {subscriber, _topics} <- Subscription.subscribers() do
       Subscription.unsubscribe(subscriber)
     end
 
-    Process.sleep(100)
     :ok
   end
 
@@ -44,7 +41,6 @@ defmodule EventBus.Service.SubscriptionTest do
     Subscription.subscribe({{Calculator, %{}}, [".*"]})
     Subscription.subscribe({{MemoryLeakerOne, %{}}, [".*"]})
     Subscription.subscribe({AnotherCalculator, [".*"]})
-    Process.sleep(300)
 
     assert [
              {AnotherCalculator, [".*"]},
@@ -58,7 +54,6 @@ defmodule EventBus.Service.SubscriptionTest do
     Subscription.subscribe({{InputLogger, %{}}, [".*"]})
     Subscription.subscribe({{InputLogger, %{}}, [".*"]})
     Subscription.subscribe({{InputLogger, %{}}, [".*"]})
-    Process.sleep(300)
 
     assert [{{InputLogger, %{}}, [".*"]}] == Subscription.subscribers()
   end
@@ -70,7 +65,6 @@ defmodule EventBus.Service.SubscriptionTest do
     Subscription.subscribe({AnotherCalculator, [".*"]})
     Subscription.unsubscribe({Calculator, %{}})
     Subscription.unsubscribe(AnotherCalculator)
-    Process.sleep(300)
 
     assert [{{MemoryLeakerOne, %{}}, [".*"]}, {{InputLogger, %{}}, [".*"]}] ==
              Subscription.subscribers()
@@ -86,8 +80,6 @@ defmodule EventBus.Service.SubscriptionTest do
 
     Subscription.register_topic(topic)
 
-    Process.sleep(300)
-
     assert [{InputLogger, %{}}, {Calculator, %{}}, AnotherCalculator] ==
              Subscription.subscribers(topic)
   end
@@ -102,21 +94,18 @@ defmodule EventBus.Service.SubscriptionTest do
 
     Subscription.register_topic(topic)
     Subscription.unregister_topic(topic)
-    Process.sleep(300)
 
     assert [] == Subscription.subscribers(topic)
   end
 
   test "subscribers" do
     Subscription.subscribe({{InputLogger, %{}}, [".*"]})
-    Process.sleep(300)
 
     assert [{{InputLogger, %{}}, [".*"]}] == Subscription.subscribers()
   end
 
   test "subscribers with event type" do
     Subscription.subscribe({{InputLogger, %{}}, [".*"]})
-    Process.sleep(300)
 
     assert [{InputLogger, %{}}] == Subscription.subscribers(:metrics_received)
     assert [{InputLogger, %{}}] == Subscription.subscribers(:metrics_summed)
@@ -124,7 +113,6 @@ defmodule EventBus.Service.SubscriptionTest do
 
   test "subscribers with event type and without config" do
     Subscription.subscribe({AnotherCalculator, [".*"]})
-    Process.sleep(300)
 
     assert [AnotherCalculator] == Subscription.subscribers(:metrics_received)
     assert [AnotherCalculator] == Subscription.subscribers(:metrics_summed)
@@ -136,20 +124,20 @@ defmodule EventBus.Service.SubscriptionTest do
     )
 
     Subscription.subscribe({AnotherCalculator, ["metrics_received$"]})
-    Process.sleep(300)
 
-    expected = {
-      [
-        {AnotherCalculator, ["metrics_received$"]},
-        {{InputLogger, %{}}, ["metrics_received", "metrics_summed"]}
-      ],
-      %{
-        metrics_received: [AnotherCalculator, {InputLogger, %{}}],
-        metrics_summed: [{InputLogger, %{}}],
-        auto_subscribed: []
-      }
-    }
+    {subscribers, topic_map} = Application.get_env(:event_bus, :subscriptions)
 
-    assert expected == Application.get_env(:event_bus, :subscriptions)
+    assert subscribers == [
+             {AnotherCalculator, ["metrics_received$"]},
+             {{InputLogger, %{}}, ["metrics_received", "metrics_summed"]}
+           ]
+
+    assert topic_map[:metrics_received] == [
+             AnotherCalculator,
+             {InputLogger, %{}}
+           ]
+
+    assert topic_map[:metrics_summed] == [{InputLogger, %{}}]
+    assert topic_map[:auto_subscribed] == []
   end
 end

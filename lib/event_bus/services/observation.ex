@@ -24,15 +24,13 @@ defmodule EventBus.Service.Observation do
   @doc false
   @spec exist?(topic()) :: boolean()
   def exist?(topic) do
-    table_name = table_name(topic)
-    all_tables = Ets.all()
-    Enum.any?(all_tables, fn table -> table == table_name end)
+    :ets.info(table_name(topic)) != :undefined
   end
 
   @doc false
   @spec register_topic(topic()) :: :ok
   def register_topic(topic) do
-    unless exist?(topic), do: Ets.new(table_name(topic), @ets_opts)
+    if !exist?(topic), do: Ets.new(table_name(topic), @ets_opts)
     :ok
   end
 
@@ -48,8 +46,13 @@ defmodule EventBus.Service.Observation do
   def mark_as_completed({subscriber, event_shadow}) do
     case fetch(event_shadow) do
       {subscribers, completers, skippers} ->
-        save_or_delete(event_shadow, {subscribers, [subscriber | completers], skippers})
-        nil -> :ok
+        save_or_delete(
+          event_shadow,
+          {subscribers, [subscriber | completers], skippers}
+        )
+
+      nil ->
+        :ok
     end
   end
 
@@ -58,16 +61,24 @@ defmodule EventBus.Service.Observation do
   def mark_as_skipped({subscriber, event_shadow}) do
     case fetch(event_shadow) do
       {subscribers, completers, skippers} ->
-        save_or_delete(event_shadow, {subscribers, completers, [subscriber | skippers]})
-      nil -> :ok
+        save_or_delete(
+          event_shadow,
+          {subscribers, completers, [subscriber | skippers]}
+        )
+
+      nil ->
+        :ok
     end
   end
 
   @doc false
-  @spec fetch(event_shadow()) :: {subscribers(), subscribers(), subscribers()} | nil
+  @spec fetch(event_shadow()) ::
+          {subscribers(), subscribers(), subscribers()} | nil
   def fetch({topic, id}) do
     case Ets.lookup(table_name(topic), id) do
-      [{_, data}] -> data
+      [{_, data}] ->
+        data
+
       _ ->
         Logger.log(:info, fn ->
           "[EVENTBUS][OBSERVATION]\s#{topic}.#{id}.ets_fetch_error"

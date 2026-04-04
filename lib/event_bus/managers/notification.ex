@@ -16,13 +16,13 @@ defmodule EventBus.Manager.Notification do
   @backend NotificationService
 
   @doc false
-  def start_link do
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc false
-  def init(args) do
-    {:ok, args}
+  def init(_opts) do
+    {:ok, nil}
   end
 
   @doc """
@@ -38,7 +38,7 @@ defmodule EventBus.Manager.Notification do
   ###########################################################################
 
   @doc false
-  @spec handle_cast({:notify, event()}, term()) :: no_return()
+  @spec handle_cast({:notify, event()}, term()) :: {:noreply, term()}
   def handle_cast({:notify, event}, state) do
     @backend.notify(event)
     {:noreply, state}

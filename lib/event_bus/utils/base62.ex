@@ -1,7 +1,7 @@
 defmodule EventBus.Util.Base62 do
   @moduledoc false
 
-  @mapping '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+  @mapping ~c"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
   @doc """
   Generates partially sequential, base62 unique identifier.
@@ -16,7 +16,7 @@ defmodule EventBus.Util.Base62 do
   """
   @spec encode(integer()) :: String.t()
   def encode(num) when num < 62 do
-    << Enum.at(@mapping, num) >>
+    <<Enum.at(@mapping, num)>>
   end
 
   def encode(num) do
