@@ -7,6 +7,7 @@ defmodule EventBus.Service.Subscription do
 
   @app :event_bus
   @namespace :subscriptions
+  @limits_table :eb_subscription_limits
 
   @typep subscriber :: EventBus.subscriber()
   @typep subscribers :: EventBus.subscribers()
@@ -20,9 +21,26 @@ defmodule EventBus.Service.Subscription do
   end
 
   @doc false
+  @spec setup_limits_table() :: :ok
+  def setup_limits_table do
+    if :ets.info(@limits_table) == :undefined do
+      :ets.new(@limits_table, [
+        :set,
+        :public,
+        :named_table,
+        {:write_concurrency, true},
+        {:read_concurrency, true}
+      ])
+    end
+
+    :ok
+  end
+
+  @doc false
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topics}) do
     Debug.log("subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}")
+    clear_limit(subscriber)
     {subscribers, topic_map} = load_state()
     subscribers = add_or_update_subscriber(subscribers, {subscriber, topics})
 
@@ -35,9 +53,36 @@ defmodule EventBus.Service.Subscription do
   end
 
   @doc false
+  @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
+  def subscribe_n({subscriber, topics}, count) when is_integer(count) and count > 0 do
+    subscribe({subscriber, topics})
+    :ets.insert(@limits_table, {subscriber, count})
+    :ok
+  end
+
+  @doc false
+  @spec decrement_limit(term()) :: :ok
+  def decrement_limit(subscriber) do
+    case :ets.lookup(@limits_table, subscriber) do
+      [{^subscriber, count}] when count <= 1 ->
+        :ets.delete(@limits_table, subscriber)
+        unsubscribe(subscriber)
+
+      [{^subscriber, count}] ->
+        :ets.insert(@limits_table, {subscriber, count - 1})
+
+      [] ->
+        :ok
+    end
+
+    :ok
+  end
+
+  @doc false
   @spec unsubscribe(subscriber()) :: :ok
   def unsubscribe(subscriber) do
     Debug.log("unsubscribe subscriber=#{inspect(subscriber)}")
+    clear_limit(subscriber)
     {subscribers, topic_map} = load_state()
     subscribers = List.keydelete(subscribers, subscriber, 0)
 
@@ -121,5 +166,13 @@ defmodule EventBus.Service.Subscription do
 
   defp init_topic_map do
     Enum.into(TopicManager.all(), %{}, fn topic -> {topic, []} end)
+  end
+
+  defp clear_limit(subscriber) do
+    if :ets.info(@limits_table) != :undefined do
+      :ets.delete(@limits_table, subscriber)
+    end
+
+    :ok
   end
 end

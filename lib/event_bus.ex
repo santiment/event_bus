@@ -157,6 +157,34 @@ defmodule EventBus do
     as: :subscribe
 
   @doc """
+  Subscribe a subscriber that auto-unsubscribes after one terminal event.
+
+  ## Examples
+
+      EventBus.subscribe_once({MyEventSubscriber, [".*"]})
+      :ok
+
+  """
+  @spec subscribe_once(subscriber_with_topic_patterns()) :: :ok
+  defdelegate subscribe_once(subscriber_with_topic_patterns),
+    to: Subscription,
+    as: :subscribe_once
+
+  @doc """
+  Subscribe a subscriber that auto-unsubscribes after N terminal events.
+
+  ## Examples
+
+      EventBus.subscribe_n({MyEventSubscriber, [".*"]}, 5)
+      :ok
+
+  """
+  @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
+  defdelegate subscribe_n(subscriber_with_topic_patterns, count),
+    to: Subscription,
+    as: :subscribe_n
+
+  @doc """
   Unsubscribe a subscriber from the event bus.
 
   ## Examples

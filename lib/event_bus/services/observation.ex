@@ -5,6 +5,7 @@ defmodule EventBus.Service.Observation do
 
   alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Service.Debug
+  alias EventBus.Service.Subscription, as: SubscriptionService
   alias :ets, as: Ets
 
   @typep event_shadow :: EventBus.event_shadow()
@@ -51,6 +52,7 @@ defmodule EventBus.Service.Observation do
           :ok
         else
           Debug.log_terminal("completed", subscriber, topic, id)
+          SubscriptionService.decrement_limit(subscriber)
 
           save_or_delete(
             event_shadow,
@@ -72,6 +74,7 @@ defmodule EventBus.Service.Observation do
           :ok
         else
           Debug.log_terminal("skipped", subscriber, topic, id)
+          SubscriptionService.decrement_limit(subscriber)
 
           save_or_delete(
             event_shadow,

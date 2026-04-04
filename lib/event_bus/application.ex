@@ -12,9 +12,11 @@ defmodule EventBus.Application do
   }
 
   alias EventBus.Service.Debug
+  alias EventBus.Service.Subscription, as: SubscriptionService
 
   def start(_type, _args) do
     Debug.setup_table()
+    SubscriptionService.setup_limits_table()
 
     children = [
       Topic,
