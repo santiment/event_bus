@@ -11,7 +11,8 @@ defmodule EventBus.Manager.Subscription do
 
   @typep subscriber :: EventBus.subscriber()
   @typep subscribers :: EventBus.subscribers()
-  @typep subscriber_with_topic_patterns :: EventBus.subscriber_with_topic_patterns()
+  @typep subscriber_with_topic_patterns ::
+           EventBus.subscriber_with_topic_patterns()
   @typep topic :: EventBus.topic()
 
   @backend SubscriptionService
@@ -91,39 +92,47 @@ defmodule EventBus.Manager.Subscription do
   ###########################################################################
 
   @doc false
-  @spec handle_call({:subscribed?, subscriber_with_topic_patterns()}, any(), term())
-    :: {:reply, boolean(), term()}
+  @spec handle_call(
+          {:subscribed?, subscriber_with_topic_patterns()},
+          any(),
+          term()
+        ) ::
+          {:reply, boolean(), term()}
   def handle_call({:subscribed?, subscriber}, _from, state) do
     {:reply, @backend.subscribed?(subscriber), state}
   end
 
   @doc false
-  @spec handle_call({:subscribe, subscriber_with_topic_patterns()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call(
+          {:subscribe, subscriber_with_topic_patterns()},
+          any(),
+          term()
+        ) ::
+          {:reply, :ok, term()}
   def handle_call({:subscribe, {subscriber, topic_patterns}}, _from, state) do
     @backend.subscribe({subscriber, topic_patterns})
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:unsubscribe, subscriber()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:unsubscribe, subscriber()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:unsubscribe, subscriber}, _from, state) do
     @backend.unsubscribe(subscriber)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:register_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:register_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:register_topic, topic}, _from, state) do
     @backend.register_topic(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:unregister_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:unregister_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:unregister_topic, topic}, _from, state) do
     @backend.unregister_topic(topic)
     {:reply, :ok, state}

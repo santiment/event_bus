@@ -106,46 +106,46 @@ defmodule EventBus.Manager.Observation do
   ###########################################################################
 
   @doc false
-  @spec handle_call({:register_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:register_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:register_topic, topic}, _from, state) do
     @backend.register_topic(topic)
     {:reply, :ok, state}
   end
 
-  @spec handle_call({:unregister_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:unregister_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:unregister_topic, topic}, _from, state) do
     @backend.unregister_topic(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:exist?, topic()}, any(), term())
-    :: {:reply, boolean(), term()}
+  @spec handle_call({:exist?, topic()}, any(), term()) ::
+          {:reply, boolean(), term()}
   def handle_call({:exist?, topic}, _from, state) do
     {:reply, @backend.exist?(topic), state}
   end
 
   @doc false
-  @spec handle_call({:save, event_shadow(), watcher()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:save, event_shadow(), watcher()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:save, {topic, id}, watcher}, _from, state) do
     @backend.save({topic, id}, watcher)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_cast({:mark_as_completed, subscriber_with_event_ref()}, term())
-    :: {:noreply, term()}
+  @spec handle_cast({:mark_as_completed, subscriber_with_event_ref()}, term()) ::
+          {:noreply, term()}
   def handle_cast({:mark_as_completed, {subscriber, {topic, id}}}, state) do
     @backend.mark_as_completed({subscriber, {topic, id}})
     {:noreply, state}
   end
 
   @doc false
-  @spec handle_cast({:mark_as_skipped, subscriber_with_event_ref()}, term())
-    :: {:noreply, term()}
+  @spec handle_cast({:mark_as_skipped, subscriber_with_event_ref()}, term()) ::
+          {:noreply, term()}
   def handle_cast({:mark_as_skipped, {subscriber, {topic, id}}}, state) do
     @backend.mark_as_skipped({subscriber, {topic, id}})
     {:noreply, state}

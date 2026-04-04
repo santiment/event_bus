@@ -37,7 +37,7 @@ defmodule EventBus.Service.Topic do
   @doc false
   @spec register(topic()) :: :ok
   def register(topic) do
-    unless exist?(topic) do
+    if !exist?(topic) do
       Application.put_env(@app, @namespace, [topic | all()], persistent: true)
       Enum.each(@modules, fn mod -> mod.register_topic(topic) end)
     end

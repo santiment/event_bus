@@ -95,23 +95,23 @@ defmodule EventBus.Manager.Store do
   ###########################################################################
 
   @doc false
-  @spec handle_call({:register_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:register_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:register_topic, topic}, _from, state) do
     @backend.register_topic(topic)
     {:reply, :ok, state}
   end
 
-  @spec handle_call({:unregister_topic, topic()}, any(), term())
-    :: {:reply, :ok, term()}
+  @spec handle_call({:unregister_topic, topic()}, any(), term()) ::
+          {:reply, :ok, term()}
   def handle_call({:unregister_topic, topic}, _from, state) do
     @backend.unregister_topic(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:exist?, topic()}, any(), term())
-    :: {:reply, boolean(), term()}
+  @spec handle_call({:exist?, topic()}, any(), term()) ::
+          {:reply, boolean(), term()}
   def handle_call({:exist?, topic}, _from, state) do
     {:reply, @backend.exist?(topic), state}
   end

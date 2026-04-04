@@ -2,6 +2,7 @@ defmodule EventBus.Service.ObservationTest do
   use ExUnit.Case, async: false
 
   alias EventBus.Service.{Observation, Topic}
+
   alias EventBus.Support.Helper.{
     BadOne,
     Calculator,
@@ -87,7 +88,8 @@ defmodule EventBus.Service.ObservationTest do
     Observation.save({topic, id}, {subscribers, [], []})
     Observation.mark_as_completed({{InputLogger, %{}}, {topic, id}})
 
-    assert {subscribers, [{InputLogger, %{}}], []} == Observation.fetch({topic, id})
+    assert {subscribers, [{InputLogger, %{}}], []} ==
+             Observation.fetch({topic, id})
   end
 
   test "skip" do
@@ -105,6 +107,7 @@ defmodule EventBus.Service.ObservationTest do
     Observation.save({topic, id}, {subscribers, [], []})
     Observation.mark_as_skipped({{InputLogger, %{}}, {topic, id}})
 
-    assert {subscribers, [], [{InputLogger, %{}}]} == Observation.fetch({topic, id})
+    assert {subscribers, [], [{InputLogger, %{}}]} ==
+             Observation.fetch({topic, id})
   end
 end

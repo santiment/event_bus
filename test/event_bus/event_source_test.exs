@@ -15,6 +15,7 @@ defmodule EventBus.EventSourceTest do
     data = %{id: 1, name: "me", email: "me@example.com"}
     transaction_id = "t1"
     ttl = 100
+
     params = %{
       id: id,
       topic: topic,
@@ -42,6 +43,7 @@ defmodule EventBus.EventSourceTest do
 
   test "build without passing source" do
     topic = :user_created
+
     event =
       EventSource.build %{topic: topic} do
         "some event data"
@@ -52,6 +54,7 @@ defmodule EventBus.EventSourceTest do
 
   test "build without passing ttl, sets the ttl from app configuration" do
     topic = :user_created
+
     event =
       EventSource.build %{topic: topic} do
         "some event data"
@@ -62,6 +65,7 @@ defmodule EventBus.EventSourceTest do
 
   test "build without passing id, sets the id with unique_id function" do
     topic = :user_created
+
     event =
       EventSource.build %{topic: topic} do
         "some event data"

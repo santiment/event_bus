@@ -9,7 +9,8 @@ defmodule EventBus.Service.Subscription do
 
   @typep subscriber :: EventBus.subscriber()
   @typep subscribers :: EventBus.subscribers()
-  @typep subscriber_with_topic_patterns :: EventBus.subscriber_with_topic_patterns()
+  @typep subscriber_with_topic_patterns ::
+           EventBus.subscriber_with_topic_patterns()
   @typep topic :: EventBus.topic()
 
   @spec subscribed?(subscriber_with_topic_patterns()) :: boolean()

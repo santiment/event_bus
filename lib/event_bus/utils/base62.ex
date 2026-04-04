@@ -16,7 +16,7 @@ defmodule EventBus.Util.Base62 do
   """
   @spec encode(integer()) :: String.t()
   def encode(num) when num < 62 do
-    << Enum.at(@mapping, num) >>
+    <<Enum.at(@mapping, num)>>
   end
 
   def encode(num) do

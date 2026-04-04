@@ -132,7 +132,11 @@ defmodule EventBus.Service.SubscriptionTest do
              {{InputLogger, %{}}, ["metrics_received", "metrics_summed"]}
            ]
 
-    assert topic_map[:metrics_received] == [AnotherCalculator, {InputLogger, %{}}]
+    assert topic_map[:metrics_received] == [
+             AnotherCalculator,
+             {InputLogger, %{}}
+           ]
+
     assert topic_map[:metrics_summed] == [{InputLogger, %{}}]
     assert topic_map[:auto_subscribed] == []
   end

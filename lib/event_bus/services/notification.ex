@@ -98,9 +98,7 @@ defmodule EventBus.Service.Notification do
     if EventBus.topic_exist?(topic) do
       Logger.warning("Topic :#{topic} doesn't have subscribers")
     else
-      Logger.warning(
-        "Topic :#{topic} is not registered and has no subscribers"
-      )
+      Logger.warning("Topic :#{topic} is not registered and has no subscribers")
     end
   end
 
