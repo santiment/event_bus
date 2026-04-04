@@ -1,6 +1,8 @@
 defmodule EventBus.Service.GuardTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias EventBus.Model.Event
 
   @topic :guard_test_topic
@@ -115,6 +117,25 @@ defmodule EventBus.Service.GuardTest do
 
     # Event should be cleaned up
     assert EventBus.fetch_event({@topic, "guard-raise-1"}) == nil
+  end
+
+  test "guard that raises does not stop later subscribers" do
+    Process.register(self(), :guard_test)
+
+    EventBus.subscribe(
+      {PassingSubscriber, ["guard_test_topic"]},
+      priority: 100,
+      guard: fn _event -> raise "guard error" end
+    )
+
+    EventBus.subscribe({AnotherSubscriber, ["guard_test_topic"]}, priority: 0)
+
+    capture_log(fn ->
+      notify_and_wait("guard-raise-continue-1")
+    end)
+
+    refute_received {:processed, PassingSubscriber, @topic, "guard-raise-continue-1"}
+    assert_received {:processed, AnotherSubscriber, @topic, "guard-raise-continue-1"}
   end
 
   test "subscriber without guard is unaffected" do

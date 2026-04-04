@@ -4,6 +4,7 @@ defmodule EventBusTest do
   import ExUnit.CaptureLog
 
   alias EventBus.Model.Event
+  alias EventBus.Service.Notification
 
   alias EventBus.Support.Helper.{
     BadOne,
@@ -39,8 +40,8 @@ defmodule EventBusTest do
 
     logs =
       capture_log(fn ->
-        EventBus.notify(@event)
-        # Wait until the subscribers process the event
+        Notification.notify(@event)
+        # Wait for follow-up async work (nested notify / GenServer.cast) to finish.
         Process.sleep(300)
       end)
 

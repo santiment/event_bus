@@ -56,6 +56,13 @@ defmodule EventBus.Service.PriorityTest do
     end
   end
 
+  defmodule ImplicitCancellingSubscriber do
+    def process({_topic, _id}) do
+      send(:priority_test, {:processed, :implicit_canceller})
+      {:cancel, "validation failed"}
+    end
+  end
+
   defmodule CancelRaisingSubscriber do
     def process({_topic, _id}) do
       send(:priority_test, {:processed, :raise_canceller})
@@ -112,6 +119,24 @@ defmodule EventBus.Service.PriorityTest do
     assert t2 <= t3
   end
 
+  test "same-priority subscribers keep their relative order" do
+    Process.register(self(), :priority_test)
+
+    EventBus.subscribe({LowPriority, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({MedPriority, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({HighPriority, ["priority_test_topic"]}, priority: 0)
+
+    notify_and_wait("prio-same-1")
+
+    order =
+      for _ <- 1..3 do
+        {:processed, priority, _timestamp} = assert_receive {:processed, _, _}
+        priority
+      end
+
+    assert order == [:high, :med, :low]
+  end
+
   test "cancellation via return value stops propagation" do
     Process.register(self(), :priority_test)
 
@@ -126,6 +151,21 @@ defmodule EventBus.Service.PriorityTest do
     # Event should be cleaned up (canceller completed, after_cancel skipped)
     Process.sleep(100)
     assert EventBus.fetch_event({@topic, "cancel-return-1"}) == nil
+  end
+
+  test "return-value cancellation cleans up even without explicit completion" do
+    Process.register(self(), :priority_test)
+
+    EventBus.subscribe({ImplicitCancellingSubscriber, ["priority_test_topic"]}, priority: 100)
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+
+    notify_and_wait("cancel-return-implicit-1")
+
+    assert_received {:processed, :implicit_canceller}
+    refute_received {:processed, :after_cancel}
+
+    Process.sleep(100)
+    assert EventBus.fetch_event({@topic, "cancel-return-implicit-1"}) == nil
   end
 
   test "cancellation via CancelEvent exception stops propagation" do

@@ -126,6 +126,7 @@ defmodule EventBus.Service.Notification do
 
     case subscriber.process({config, topic, id}) do
       {:cancel, reason} ->
+        ObservationManager.mark_as_completed({sub_key, {topic, id}})
         Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}")
         :cancelled
 
@@ -156,6 +157,7 @@ defmodule EventBus.Service.Notification do
 
     case subscriber.process({topic, id}) do
       {:cancel, reason} ->
+        ObservationManager.mark_as_completed({subscriber, {topic, id}})
         Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(subscriber)} reason=#{inspect(reason)}")
         :cancelled
 
