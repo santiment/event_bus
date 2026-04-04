@@ -2,6 +2,7 @@ defmodule EventBus.Service.Subscription do
   @moduledoc false
 
   alias EventBus.Manager.Topic, as: TopicManager
+  alias EventBus.Service.Debug
   alias EventBus.Util.Regex, as: RegexUtil
 
   @app :event_bus
@@ -21,6 +22,7 @@ defmodule EventBus.Service.Subscription do
   @doc false
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topics}) do
+    Debug.log("subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}")
     {subscribers, topic_map} = load_state()
     subscribers = add_or_update_subscriber(subscribers, {subscriber, topics})
 
@@ -35,6 +37,7 @@ defmodule EventBus.Service.Subscription do
   @doc false
   @spec unsubscribe(subscriber()) :: :ok
   def unsubscribe(subscriber) do
+    Debug.log("unsubscribe subscriber=#{inspect(subscriber)}")
     {subscribers, topic_map} = load_state()
     subscribers = List.keydelete(subscribers, subscriber, 0)
 

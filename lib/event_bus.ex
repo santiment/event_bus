@@ -13,6 +13,7 @@ defmodule EventBus do
   }
 
   alias EventBus.Model.Event
+  alias EventBus.Service.Debug
 
   @typedoc "EventBus.Model.Event struct"
   @type event :: Event.t()
@@ -304,4 +305,24 @@ defmodule EventBus do
   defdelegate mark_as_skipped(subscriber_with_event_ref),
     to: Observation,
     as: :mark_as_skipped
+
+  @doc """
+  Toggle debug mode on or off.
+
+  When enabled, EventBus logs the full lifecycle of every event
+  using `Logger.debug/1`.
+
+  ## Examples
+
+      EventBus.toggle_debug(true)
+      :ok
+
+      EventBus.toggle_debug(false)
+      :ok
+
+  """
+  @spec toggle_debug(boolean()) :: :ok
+  defdelegate toggle_debug(enabled),
+    to: Debug,
+    as: :toggle
 end

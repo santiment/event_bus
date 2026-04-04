@@ -7,6 +7,7 @@ defmodule EventBus.Service.Notification do
   alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Model.Event
+  alias EventBus.Service.Debug
   alias EventBus.Telemetry
 
   @typep event :: EventBus.event()
@@ -23,6 +24,8 @@ defmodule EventBus.Service.Notification do
     if subscribers == [] do
       warn_missing_topic_subscription(topic)
     else
+      Debug.log("notify topic=#{inspect(topic)} id=#{inspect(id)}")
+
       :ok = StoreManager.create(event)
       :ok = ObservationManager.create({subscribers, {topic, id}})
 
@@ -59,6 +62,8 @@ defmodule EventBus.Service.Notification do
 
   @spec notify_subscriber(subscriber(), event_shadow(), integer()) :: :ok
   defp notify_subscriber({subscriber, config}, {topic, id}, start_time) do
+    Debug.log("dispatch topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect({subscriber, config})}")
+    Debug.record_dispatch({subscriber, config}, topic, id)
     subscriber.process({config, topic, id})
   rescue
     error ->
@@ -70,6 +75,8 @@ defmodule EventBus.Service.Notification do
   end
 
   defp notify_subscriber(subscriber, {topic, id}, start_time) do
+    Debug.log("dispatch topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(subscriber)}")
+    Debug.record_dispatch(subscriber, topic, id)
     subscriber.process({topic, id})
   rescue
     error ->

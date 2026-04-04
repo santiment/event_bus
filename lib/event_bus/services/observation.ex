@@ -4,6 +4,7 @@ defmodule EventBus.Service.Observation do
   require Logger
 
   alias EventBus.Manager.Store, as: StoreManager
+  alias EventBus.Service.Debug
   alias :ets, as: Ets
 
   @typep event_shadow :: EventBus.event_shadow()
@@ -43,12 +44,14 @@ defmodule EventBus.Service.Observation do
 
   @doc false
   @spec mark_as_completed(subscriber_with_event_ref()) :: :ok
-  def mark_as_completed({subscriber, event_shadow}) do
+  def mark_as_completed({subscriber, {topic, id} = event_shadow}) do
     case fetch(event_shadow) do
       {subscribers, completers, skippers} ->
         if subscriber in completers or subscriber in skippers do
           :ok
         else
+          Debug.log_terminal("completed", subscriber, topic, id)
+
           save_or_delete(
             event_shadow,
             {subscribers, [subscriber | completers], skippers}
@@ -62,12 +65,14 @@ defmodule EventBus.Service.Observation do
 
   @doc false
   @spec mark_as_skipped(subscriber_with_event_ref()) :: :ok
-  def mark_as_skipped({subscriber, event_shadow}) do
+  def mark_as_skipped({subscriber, {topic, id} = event_shadow}) do
     case fetch(event_shadow) do
       {subscribers, completers, skippers} ->
         if subscriber in completers or subscriber in skippers do
           :ok
         else
+          Debug.log_terminal("skipped", subscriber, topic, id)
+
           save_or_delete(
             event_shadow,
             {subscribers, completers, [subscriber | skippers]}
@@ -120,6 +125,8 @@ defmodule EventBus.Service.Observation do
 
   @spec delete_with_relations(event_shadow()) :: :ok
   defp delete_with_relations({topic, id}) do
+    Debug.log("cleaned topic=#{inspect(topic)} id=#{inspect(id)}")
+    Debug.clean_dispatch_metadata(topic, id)
     StoreManager.delete({topic, id})
     Ets.delete(table_name(topic), id)
 
