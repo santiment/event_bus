@@ -34,7 +34,7 @@ defmodule EventBus.Service.Notification do
         %{topic: topic, event_id: id}
       )
 
-      notify_subscribers(subscribers, {topic, id})
+      notify_subscribers(subscribers, {topic, id}, start_time)
 
       duration = System.monotonic_time() - start_time
 
@@ -48,40 +48,42 @@ defmodule EventBus.Service.Notification do
     :ok
   end
 
-  @spec notify_subscribers(subscribers(), event_shadow()) :: :ok
-  defp notify_subscribers(subscribers, event_shadow) do
+  @spec notify_subscribers(subscribers(), event_shadow(), integer()) :: :ok
+  defp notify_subscribers(subscribers, event_shadow, start_time) do
     Enum.each(subscribers, fn subscriber ->
-      notify_subscriber(subscriber, event_shadow)
+      notify_subscriber(subscriber, event_shadow, start_time)
     end)
 
     :ok
   end
 
-  @spec notify_subscriber(subscriber(), event_shadow()) :: :ok
-  defp notify_subscriber({subscriber, config}, {topic, id}) do
+  @spec notify_subscriber(subscriber(), event_shadow(), integer()) :: :ok
+  defp notify_subscriber({subscriber, config}, {topic, id}, start_time) do
     subscriber.process({config, topic, id})
   rescue
     error ->
       stacktrace = __STACKTRACE__
+      duration = System.monotonic_time() - start_time
       log_error(subscriber, error, stacktrace)
-      emit_exception_telemetry(subscriber, topic, id, error, stacktrace)
+      emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace)
       ObservationManager.mark_as_skipped({{subscriber, config}, {topic, id}})
   end
 
-  defp notify_subscriber(subscriber, {topic, id}) do
+  defp notify_subscriber(subscriber, {topic, id}, start_time) do
     subscriber.process({topic, id})
   rescue
     error ->
       stacktrace = __STACKTRACE__
+      duration = System.monotonic_time() - start_time
       log_error(subscriber, error, stacktrace)
-      emit_exception_telemetry(subscriber, topic, id, error, stacktrace)
+      emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace)
       ObservationManager.mark_as_skipped({subscriber, {topic, id}})
   end
 
-  defp emit_exception_telemetry(subscriber, topic, id, error, stacktrace) do
+  defp emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace) do
     Telemetry.execute(
       [:event_bus, :notify, :exception],
-      %{duration: 0},
+      %{duration: duration},
       %{
         topic: topic,
         event_id: id,

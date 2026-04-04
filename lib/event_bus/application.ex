@@ -21,8 +21,10 @@ defmodule EventBus.Application do
     ]
 
     opts = [strategy: :one_for_one, name: EventBus.Supervisor]
-    link = Supervisor.start_link(children, opts)
-    Topic.register_from_config()
-    link
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      Topic.register_from_config()
+      {:ok, pid}
+    end
   end
 end
