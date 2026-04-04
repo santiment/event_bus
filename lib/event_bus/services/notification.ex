@@ -7,6 +7,7 @@ defmodule EventBus.Service.Notification do
   alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Model.Event
+  alias EventBus.Telemetry
 
   @typep event :: EventBus.event()
   @typep event_shadow :: EventBus.event_shadow()
@@ -25,7 +26,23 @@ defmodule EventBus.Service.Notification do
       :ok = StoreManager.create(event)
       :ok = ObservationManager.create({subscribers, {topic, id}})
 
+      start_time = System.monotonic_time()
+
+      Telemetry.execute(
+        [:event_bus, :notify, :start],
+        %{system_time: System.system_time()},
+        %{topic: topic, event_id: id}
+      )
+
       notify_subscribers(subscribers, {topic, id})
+
+      duration = System.monotonic_time() - start_time
+
+      Telemetry.execute(
+        [:event_bus, :notify, :stop],
+        %{duration: duration},
+        %{topic: topic, event_id: id, subscriber_count: length(subscribers)}
+      )
     end
 
     :ok
@@ -36,15 +53,18 @@ defmodule EventBus.Service.Notification do
     Enum.each(subscribers, fn subscriber ->
       notify_subscriber(subscriber, event_shadow)
     end)
+
     :ok
   end
 
-  @spec notify_subscriber(subscriber(), event_shadow()) :: no_return()
+  @spec notify_subscriber(subscriber(), event_shadow()) :: :ok
   defp notify_subscriber({subscriber, config}, {topic, id}) do
     subscriber.process({config, topic, id})
   rescue
     error ->
-      log_error(subscriber, error)
+      stacktrace = __STACKTRACE__
+      log_error(subscriber, error, stacktrace)
+      emit_exception_telemetry(subscriber, topic, id, error, stacktrace)
       ObservationManager.mark_as_skipped({{subscriber, config}, {topic, id}})
   end
 
@@ -52,26 +72,41 @@ defmodule EventBus.Service.Notification do
     subscriber.process({topic, id})
   rescue
     error ->
-      log_error(subscriber, error)
+      stacktrace = __STACKTRACE__
+      log_error(subscriber, error, stacktrace)
+      emit_exception_telemetry(subscriber, topic, id, error, stacktrace)
       ObservationManager.mark_as_skipped({subscriber, {topic, id}})
   end
 
-  @spec registration_status(topic()) :: String.t()
-  defp registration_status(topic) do
-    if EventBus.topic_exist?(topic), do: "", else: " doesn't exist!"
+  defp emit_exception_telemetry(subscriber, topic, id, error, stacktrace) do
+    Telemetry.execute(
+      [:event_bus, :notify, :exception],
+      %{duration: 0},
+      %{
+        topic: topic,
+        event_id: id,
+        subscriber: subscriber,
+        kind: :error,
+        reason: error,
+        stacktrace: stacktrace
+      }
+    )
   end
 
-  @spec warn_missing_topic_subscription(topic()) :: no_return()
+  @spec warn_missing_topic_subscription(topic()) :: :ok
   defp warn_missing_topic_subscription(topic) do
-    msg =
-      "Topic(:#{topic}#{registration_status(topic)}) doesn't have subscribers"
-
-    Logger.warn(msg)
+    if EventBus.topic_exist?(topic) do
+      Logger.warning("Topic :#{topic} doesn't have subscribers")
+    else
+      Logger.warning(
+        "Topic :#{topic} is not registered and has no subscribers"
+      )
+    end
   end
 
-  @spec log_error(module(), any()) :: no_return()
-  defp log_error(subscriber, error) do
-    msg = "#{subscriber}.process/1 raised an error!\n#{inspect(error)}"
-    Logger.info(msg)
+  @spec log_error(module(), any(), Exception.stacktrace()) :: :ok
+  defp log_error(subscriber, error, stacktrace) do
+    formatted = Exception.format(:error, error, stacktrace)
+    Logger.error("#{subscriber}.process/1 raised an error!\n#{formatted}")
   end
 end

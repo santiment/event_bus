@@ -15,13 +15,13 @@ defmodule EventBus.Manager.Topic do
   @backend TopicService
 
   @doc false
-  def start_link do
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc false
-  def init(args) do
-    {:ok, args}
+  def init(_opts) do
+    {:ok, nil}
   end
 
   @doc """

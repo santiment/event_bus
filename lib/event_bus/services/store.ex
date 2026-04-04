@@ -16,9 +16,7 @@ defmodule EventBus.Service.Store do
   @doc false
   @spec exist?(topic()) :: boolean()
   def exist?(topic) do
-    table_name = table_name(topic)
-    all_tables = Ets.all()
-    Enum.any?(all_tables, fn table -> table == table_name end)
+    :ets.info(table_name(topic)) != :undefined
   end
 
   @doc false

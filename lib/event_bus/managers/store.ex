@@ -19,13 +19,13 @@ defmodule EventBus.Manager.Store do
   @backend StoreService
 
   @doc false
-  def start_link do
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc false
-  def init(args) do
-    {:ok, args}
+  def init(_opts) do
+    {:ok, nil}
   end
 
   @doc """
@@ -117,13 +117,13 @@ defmodule EventBus.Manager.Store do
   end
 
   @doc false
-  @spec handle_call({:create, event()}, any(), term()) :: no_return()
+  @spec handle_call({:create, event()}, any(), term()) :: {:reply, :ok, term()}
   def handle_call({:create, event}, _from, state) do
     @backend.create(event)
     {:reply, :ok, state}
   end
 
-  @spec handle_cast({:delete, event_shadow()}, term()) :: no_return()
+  @spec handle_cast({:delete, event_shadow()}, term()) :: {:noreply, term()}
   def handle_cast({:delete, {topic, id}}, state) do
     @backend.delete({topic, id})
     {:noreply, state}

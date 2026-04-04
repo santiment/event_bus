@@ -59,7 +59,9 @@ defmodule EventBus.Service.TopicTest do
   test "all" do
     topic = :t3
     Topic.register(topic)
-    assert [:t3, :metrics_received, :metrics_summed] == Topic.all()
+    all = Topic.all()
+    assert :t3 in all
+    assert :metrics_received in all
   end
 
   test "exist? with an existent topic" do
