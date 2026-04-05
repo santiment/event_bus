@@ -221,4 +221,36 @@ defmodule EventBus.Service.SubscribeOnceTest do
 
     assert [{{DelayedCompletionSubscriber, nil}, _patterns}] = EventBus.subscribers()
   end
+
+  test "subscribe_once does not overdeliver while a prior event is still in flight" do
+    Application.put_env(:event_bus, :subscribe_once_test_pid, self())
+
+    EventBus.subscribe_once({DelayedCompletionSubscriber, ["subscribe_once_topic"]})
+
+    first_event = %Event{id: "in-flight-1", topic: @topic, data: %{}}
+    second_event = %Event{id: "in-flight-2", topic: @topic, data: %{}}
+
+    EventBus.notify(first_event)
+
+    waiter =
+      receive do
+        {:completion_waiter, "in-flight-1", pid} ->
+          assert_receive {:spawned_waiter, "in-flight-1", ^pid}
+          pid
+
+        {:spawned_waiter, "in-flight-1", pid} ->
+          assert_receive {:completion_waiter, "in-flight-1", ^pid}
+          pid
+      end
+
+    EventBus.notify(second_event)
+
+    refute_receive {:completion_waiter, "in-flight-2", _pid}, 150
+    refute_receive {:spawned_waiter, "in-flight-2", _pid}, 150
+
+    send(waiter, :complete)
+    Process.sleep(100)
+
+    assert [] == EventBus.subscribers()
+  end
 end

@@ -5,8 +5,34 @@ defmodule EventBus.Manager.Subscription do
   # Subscription manager
   #
   # The GenServer serializes writes to subscription control-plane data
-  # (opts, limits, generations). Reads of opts and generations go directly
-  # through ETS for zero-overhead access on the notification hot path.
+  # (opts, limits, generations). Reads of opts go directly through ETS
+  # for zero-overhead access on the notification hot path.
+  #
+  # ## Generations
+  #
+  # Each subscriber has a monotonically increasing generation counter,
+  # bumped on every subscribe/resubscribe. When an event is dispatched,
+  # the current generation is captured in a snapshot alongside the event.
+  # When the subscriber eventually reaches a terminal state (completed or
+  # skipped), the observation layer passes the saved generation to
+  # decrement_limit/2. If it no longer matches the subscriber's current
+  # generation — because the subscriber re-subscribed in the meantime —
+  # the decrement is ignored. This prevents a stale completion from
+  # spending a fresh subscription's budget.
+  #
+  # ## Limits and in-flight tracking
+  #
+  # subscribe_once/subscribe_n set a `remaining` counter. Because events
+  # are dispatched concurrently (via Task.Supervisor), multiple events
+  # can be in flight before any terminal callback arrives to decrement
+  # the counter. Without tracking in-flight events, a subscribe_once
+  # subscriber could receive two events before the first one completes.
+  #
+  # To prevent overdelivery, prepare_subscribers_for_dispatch/1 checks
+  # `remaining > in_flight` (not just `remaining > 0`) and increments
+  # in_flight for each admitted event. decrement_limit/2 then decrements
+  # both remaining and in_flight. The subscriber is only unsubscribed
+  # when remaining=0 AND in_flight=0, meaning all deliveries are done.
   ###########################################################################
 
   use GenServer
@@ -29,10 +55,8 @@ defmodule EventBus.Manager.Subscription do
 
   @doc false
   def init(_opts) do
-    # limits: remaining subscribe_once/subscribe_n counters (read-modify-write,
-    #   stays in GenServer state for serialized access)
-    # generations: monotonically increasing version per subscriber (authoritative
-    #   copy lives here; a snapshot is written to ETS for lock-free reads)
+    # generations: %{subscriber => integer} — see "Generations" above
+    # limits: %{subscriber => %{generation, remaining, in_flight}} — see "Limits" above
     {:ok, %{limits: %{}, generations: %{}}}
   end
 
@@ -113,23 +137,32 @@ defmodule EventBus.Manager.Subscription do
   end
 
   @doc """
-  Snapshot the current generation for each subscriber directly from ETS.
-  No GenServer.call — this is on the notification hot path.
-  """
-  @spec snapshot_generations(subscribers()) :: %{optional(subscriber()) => non_neg_integer()}
-  def snapshot_generations(subscribers) do
-    Enum.into(subscribers, %{}, fn subscriber ->
-      generation =
-        case :ets.lookup(@opts_table, subscriber) do
-          [{^subscriber, %{generation: gen}}] -> gen
-          _ -> 0
-        end
+  Prepare the subscriber list for a single dispatch cycle.
 
-      {subscriber, generation}
-    end)
+  For each subscriber:
+  - Unlimited subscribers are always included.
+  - Limited subscribers (subscribe_once/subscribe_n) are included only if
+    `remaining > in_flight`, and their in_flight counter is incremented.
+
+  Returns `{admitted_subscribers, generation_snapshot}` where the snapshot
+  maps each admitted subscriber to the generation that was current at
+  dispatch time. The snapshot is stored alongside the event so that
+  terminal callbacks (which may arrive much later) decrement the correct
+  subscription generation.
+  """
+  @spec prepare_subscribers_for_dispatch(subscribers()) ::
+          {subscribers(), %{optional(subscriber()) => non_neg_integer()}}
+  def prepare_subscribers_for_dispatch(subscribers) do
+    GenServer.call(__MODULE__, {:prepare_subscribers_for_dispatch, subscribers})
   end
 
-  @doc false
+  @doc """
+  Decrement the remaining counter for a limited subscriber after a terminal
+  event (completed or skipped). The generation argument must match the
+  subscriber's current generation — stale decrements from a prior
+  subscription are ignored. Also decrements in_flight. When both reach 0,
+  the subscriber is auto-unsubscribed.
+  """
   @spec decrement_limit(subscriber(), non_neg_integer()) :: :ok
   def decrement_limit(subscriber, generation) do
     GenServer.call(__MODULE__, {:decrement_limit, subscriber, generation})
@@ -161,32 +194,30 @@ defmodule EventBus.Manager.Subscription do
 
   @doc false
   def handle_call({:subscribe, {subscriber, topic_patterns}}, _from, state) do
-    @backend.subscribe({subscriber, topic_patterns})
     state = reset_subscription_state(state, subscriber)
     write_opts_to_ets(subscriber, %{priority: 0, guard: nil}, state)
+    @backend.subscribe({subscriber, topic_patterns})
     {:reply, :ok, state}
   end
 
   @doc false
   def handle_call({:subscribe_n, {subscriber, topic_patterns}, count}, _from, state) do
-    @backend.subscribe({subscriber, topic_patterns})
-
     state =
       state
       |> reset_subscription_state(subscriber)
       |> put_limit(subscriber, count)
 
     write_opts_to_ets(subscriber, %{priority: 0, guard: nil}, state)
+    @backend.subscribe({subscriber, topic_patterns})
     {:reply, :ok, state}
   end
 
   @doc false
   def handle_call({:subscribe_with_opts, {subscriber, topic_patterns}, opts}, _from, state) do
     normalized_opts = normalize_opts!(opts)
-    @backend.subscribe({subscriber, topic_patterns})
-
     state = reset_subscription_state(state, subscriber)
     write_opts_to_ets(subscriber, normalized_opts, state)
+    @backend.subscribe({subscriber, topic_patterns})
     {:reply, :ok, state}
   end
 
@@ -195,6 +226,12 @@ defmodule EventBus.Manager.Subscription do
     @backend.unsubscribe(subscriber)
     :ets.delete(@opts_table, subscriber)
     {:reply, :ok, clear_subscription_state(state, subscriber)}
+  end
+
+  @doc false
+  def handle_call({:prepare_subscribers_for_dispatch, subscribers}, _from, state) do
+    {admitted, snapshot, state} = do_prepare_subscribers(subscribers, state)
+    {:reply, {admitted, snapshot}, state}
   end
 
   @doc false
@@ -252,23 +289,54 @@ defmodule EventBus.Manager.Subscription do
 
   defp put_limit(state, subscriber, count) when is_integer(count) and count > 0 do
     generation = Map.fetch!(state.generations, subscriber)
-    limit = %{generation: generation, remaining: count}
+    limit = %{generation: generation, remaining: count, in_flight: 0}
     %{state | limits: Map.put(state.limits, subscriber, limit)}
   end
 
   defp maybe_decrement_limit(state, subscriber, generation) do
     case Map.get(state.limits, subscriber) do
-      %{generation: ^generation, remaining: remaining} when remaining <= 1 ->
-        @backend.unsubscribe(subscriber)
-        :ets.delete(@opts_table, subscriber)
-        clear_subscription_state(state, subscriber)
-
-      %{generation: ^generation, remaining: remaining} ->
-        %{state | limits: Map.put(state.limits, subscriber, %{generation: generation, remaining: remaining - 1})}
+      %{generation: ^generation, remaining: remaining, in_flight: in_flight} = limit
+      when in_flight > 0 ->
+        updated_limit = %{limit | remaining: remaining - 1, in_flight: in_flight - 1}
+        maybe_finalize_limit(state, subscriber, updated_limit)
 
       _ ->
         state
     end
+  end
+
+  defp do_prepare_subscribers(subscribers, state) do
+    {admitted, snapshot, limits} =
+      Enum.reduce(subscribers, {[], %{}, state.limits}, fn subscriber, {admitted, snapshot, limits} ->
+        case Map.get(limits, subscriber) do
+          nil ->
+            generation = Map.get(state.generations, subscriber, 0)
+            {[subscriber | admitted], Map.put(snapshot, subscriber, generation), limits}
+
+          %{generation: generation, remaining: remaining, in_flight: in_flight} = limit
+          when remaining > in_flight ->
+            updated_limit = %{limit | in_flight: in_flight + 1}
+
+            {[
+               subscriber | admitted
+             ], Map.put(snapshot, subscriber, generation), Map.put(limits, subscriber, updated_limit)}
+
+          _ ->
+            {admitted, snapshot, limits}
+        end
+      end)
+
+    {Enum.reverse(admitted), snapshot, %{state | limits: limits}}
+  end
+
+  defp maybe_finalize_limit(state, subscriber, %{remaining: 0, in_flight: 0}) do
+    @backend.unsubscribe(subscriber)
+    :ets.delete(@opts_table, subscriber)
+    clear_subscription_state(state, subscriber)
+  end
+
+  defp maybe_finalize_limit(state, subscriber, updated_limit) do
+    %{state | limits: Map.put(state.limits, subscriber, updated_limit)}
   end
 
   # Normalize bare module subscribers to {module, nil} so all downstream

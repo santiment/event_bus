@@ -23,31 +23,35 @@ defmodule EventBus.Service.Notification do
     if subscribers == [] do
       warn_missing_topic_subscription(topic)
     else
-      Debug.log("notify topic=#{inspect(topic)} id=#{inspect(id)}")
+      {admitted_subscribers, snapshot} = SubscriptionManager.prepare_subscribers_for_dispatch(subscribers)
 
-      :ok = StoreService.create(event)
-      :ok = ObservationService.save({topic, id}, {subscribers, [], []})
-      # Persist the subscription versions that were active for this event so
-      # later async completions/skips cannot mutate a newer re-subscription.
-      :ok = ObservationService.save_snapshot({topic, id}, SubscriptionManager.snapshot_generations(subscribers))
+      if admitted_subscribers == [] do
+        Debug.log("notify_dropped topic=#{inspect(topic)} id=#{inspect(id)} reason=no_admitted_subscribers")
+      else
+        Debug.log("notify topic=#{inspect(topic)} id=#{inspect(id)}")
 
-      start_time = System.monotonic_time()
+        :ok = StoreService.create(event)
+        :ok = ObservationService.save({topic, id}, {admitted_subscribers, [], []})
+        :ok = ObservationService.save_snapshot({topic, id}, snapshot)
 
-      Telemetry.execute(
-        [:event_bus, :notify, :start],
-        %{system_time: System.system_time()},
-        %{topic: topic, event_id: id}
-      )
+        start_time = System.monotonic_time()
 
-      notify_subscribers(subscribers, event, start_time)
+        Telemetry.execute(
+          [:event_bus, :notify, :start],
+          %{system_time: System.system_time()},
+          %{topic: topic, event_id: id}
+        )
 
-      duration = System.monotonic_time() - start_time
+        notify_subscribers(admitted_subscribers, event, start_time)
 
-      Telemetry.execute(
-        [:event_bus, :notify, :stop],
-        %{duration: duration},
-        %{topic: topic, event_id: id, subscriber_count: length(subscribers)}
-      )
+        duration = System.monotonic_time() - start_time
+
+        Telemetry.execute(
+          [:event_bus, :notify, :stop],
+          %{duration: duration},
+          %{topic: topic, event_id: id, subscriber_count: length(admitted_subscribers)}
+        )
+      end
     end
 
     :ok
