@@ -97,6 +97,35 @@ defmodule EventBus.Service.StoreTest do
     Store.delete({topic, "E1"})
   end
 
+  test "create stores bus-owned metadata with inserted_at" do
+    topic = :metadata_test
+
+    event = %Event{
+      id: "META1",
+      transaction_id: "T1",
+      data: "test",
+      topic: topic
+    }
+
+    before = System.monotonic_time()
+    Store.create(event)
+    after_time = System.monotonic_time()
+
+    metadata = Store.fetch_metadata({topic, "META1"})
+    assert metadata != nil
+    assert is_integer(metadata.inserted_at)
+    assert metadata.inserted_at >= before
+    assert metadata.inserted_at <= after_time
+
+    Store.delete({topic, "META1"})
+  end
+
+  test "fetch_metadata returns nil for non-existent event" do
+    capture_log(fn ->
+      assert is_nil(Store.fetch_metadata({:no_topic, "no_id"}))
+    end)
+  end
+
   test "delete and fetch" do
     topic = :metrics_received_5
 
