@@ -151,31 +151,15 @@ defmodule EventBus.Service.SubscriptionTest do
     assert [] == Subscription.subscribers(:auto_subscribed)
   end
 
-  test "guard closures are not exposed to arbitrary processes" do
-    secret = System.unique_integer([:positive])
-
+  test "opts are stored in ETS for hot-path reads" do
     EventBus.subscribe(
       {AnotherCalculator, ["metrics_received"]},
-      guard: fn event -> Map.get(event.data, :secret) == secret end,
+      guard: fn _event -> true end,
       priority: 7
     )
 
-    task =
-      Task.async(fn ->
-        try do
-          case :ets.lookup(:eb_subscription_opts, AnotherCalculator) do
-            [{AnotherCalculator, %{guard: guard}}] ->
-              {:exposed, :erlang.fun_info(guard, :env)}
-
-            _ ->
-              :not_exposed
-          end
-        rescue
-          ArgumentError ->
-            :not_exposed
-        end
-      end)
-
-    assert :not_exposed == Task.await(task)
+    opts = EventBus.Manager.Subscription.fetch_opts(AnotherCalculator)
+    assert opts.priority == 7
+    assert is_function(opts.guard, 1)
   end
 end

@@ -3,6 +3,10 @@ defmodule EventBus.Manager.Subscription do
 
   ###########################################################################
   # Subscription manager
+  #
+  # The GenServer serializes writes to subscription control-plane data
+  # (opts, limits, generations). Reads of opts and generations go directly
+  # through ETS for zero-overhead access on the notification hot path.
   ###########################################################################
 
   use GenServer
@@ -16,6 +20,7 @@ defmodule EventBus.Manager.Subscription do
   @typep topic :: EventBus.topic()
 
   @backend SubscriptionService
+  @opts_table :eb_subscription_opts
 
   @doc false
   def start_link(opts \\ []) do
@@ -24,25 +29,20 @@ defmodule EventBus.Manager.Subscription do
 
   @doc false
   def init(_opts) do
-    # Control-plane data lives in the GenServer state instead of ETS:
-    #   * opts: validated guard/priority settings
-    #   * limits: remaining subscribe_once/subscribe_n counters
-    #   * generations: monotonically increasing version per subscriber
-    #
-    # The generation lets us bind a terminal event back to the subscription
-    # version that was active when the event was dispatched. Without it, an
-    # older async completion can spend the limit of a freshly re-subscribed
-    # subscriber.
-    {:ok, %{opts: %{}, limits: %{}, generations: %{}}}
+    # limits: remaining subscribe_once/subscribe_n counters (read-modify-write,
+    #   stays in GenServer state for serialized access)
+    # generations: monotonically increasing version per subscriber (authoritative
+    #   copy lives here; a snapshot is written to ETS for lock-free reads)
+    {:ok, %{limits: %{}, generations: %{}}}
   end
 
   @doc """
   Does the subscriber subscribe to topic_patterns?
   """
   @spec subscribed?(subscriber_with_topic_patterns()) :: boolean()
-  def subscribed?({_subscriber, _topic_patterns} = subscriber) do
-    GenServer.call(__MODULE__, {:subscribed?, subscriber})
-  end
+  defdelegate subscribed?(subscriber),
+    to: @backend,
+    as: :subscribed?
 
   @doc """
   Subscribe the subscriber to topic_patterns
@@ -100,16 +100,33 @@ defmodule EventBus.Manager.Subscription do
     GenServer.call(__MODULE__, {:unregister_topic, topic})
   end
 
-  @doc false
+  @doc """
+  Read subscriber opts (priority, guard) directly from ETS.
+  No GenServer.call — this is on the notification hot path.
+  """
   @spec fetch_opts(subscriber()) :: %{guard: function() | nil, priority: integer()}
   def fetch_opts(subscriber) do
-    GenServer.call(__MODULE__, {:fetch_opts, subscriber})
+    case :ets.lookup(@opts_table, subscriber) do
+      [{^subscriber, opts}] -> Map.take(opts, [:priority, :guard])
+      _ -> %{priority: 0, guard: nil}
+    end
   end
 
-  @doc false
+  @doc """
+  Snapshot the current generation for each subscriber directly from ETS.
+  No GenServer.call — this is on the notification hot path.
+  """
   @spec snapshot_generations(subscribers()) :: %{optional(subscriber()) => non_neg_integer()}
   def snapshot_generations(subscribers) do
-    GenServer.call(__MODULE__, {:snapshot_generations, subscribers})
+    Enum.into(subscribers, %{}, fn subscriber ->
+      generation =
+        case :ets.lookup(@opts_table, subscriber) do
+          [{^subscriber, %{generation: gen}}] -> gen
+          _ -> 0
+        end
+
+      {subscriber, generation}
+    end)
   end
 
   @doc false
@@ -143,32 +160,15 @@ defmodule EventBus.Manager.Subscription do
   ###########################################################################
 
   @doc false
-  @spec handle_call(
-          {:subscribed?, subscriber_with_topic_patterns()},
-          any(),
-          term()
-        ) ::
-          {:reply, boolean(), term()}
-  def handle_call({:subscribed?, subscriber}, _from, state) do
-    {:reply, @backend.subscribed?(subscriber), state}
-  end
-
-  @doc false
-  @spec handle_call(
-          {:subscribe, subscriber_with_topic_patterns()},
-          any(),
-          term()
-        ) ::
-          {:reply, :ok, term()}
   def handle_call({:subscribe, {subscriber, topic_patterns}}, _from, state) do
     @backend.subscribe({subscriber, topic_patterns})
-    {:reply, :ok, reset_subscription_state(state, subscriber)}
+    state = reset_subscription_state(state, subscriber)
+    write_opts_to_ets(subscriber, %{priority: 0, guard: nil}, state)
+    {:reply, :ok, state}
   end
 
   @doc false
   def handle_call({:subscribe_n, {subscriber, topic_patterns}, count}, _from, state) do
-    # Reuse the same ETS-backed subscriber/topic registration path as a normal
-    # subscription, then track the per-subscription limit only in manager state.
     @backend.subscribe({subscriber, topic_patterns})
 
     state =
@@ -176,64 +176,37 @@ defmodule EventBus.Manager.Subscription do
       |> reset_subscription_state(subscriber)
       |> put_limit(subscriber, count)
 
+    write_opts_to_ets(subscriber, %{priority: 0, guard: nil}, state)
     {:reply, :ok, state}
   end
 
   @doc false
   def handle_call({:subscribe_with_opts, {subscriber, topic_patterns}, opts}, _from, state) do
-    # Validate options before mutating state so invalid priorities/guards fail
-    # fast at subscribe time instead of crashing the notifier later.
     normalized_opts = normalize_opts!(opts)
     @backend.subscribe({subscriber, topic_patterns})
 
-    state =
-      state
-      |> reset_subscription_state(subscriber)
-      |> put_opts(subscriber, normalized_opts)
-
+    state = reset_subscription_state(state, subscriber)
+    write_opts_to_ets(subscriber, normalized_opts, state)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:unsubscribe, subscriber()}, any(), term()) ::
-          {:reply, :ok, term()}
   def handle_call({:unsubscribe, subscriber}, _from, state) do
     @backend.unsubscribe(subscriber)
+    :ets.delete(@opts_table, subscriber)
     {:reply, :ok, clear_subscription_state(state, subscriber)}
   end
 
   @doc false
-  @spec handle_call({:register_topic, topic()}, any(), term()) ::
-          {:reply, :ok, term()}
   def handle_call({:register_topic, topic}, _from, state) do
     @backend.register_topic(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:unregister_topic, topic()}, any(), term()) ::
-          {:reply, :ok, term()}
   def handle_call({:unregister_topic, topic}, _from, state) do
     @backend.unregister_topic(topic)
     {:reply, :ok, state}
-  end
-
-  @doc false
-  def handle_call({:fetch_opts, subscriber}, _from, state) do
-    {:reply, Map.get(state.opts, subscriber, %{priority: 0, guard: nil}), state}
-  end
-
-  @doc false
-  def handle_call({:snapshot_generations, subscribers}, _from, state) do
-    # Capture the generation that was current at dispatch time for each
-    # subscriber. Observation stores this snapshot alongside the watcher entry
-    # and uses it later when terminal states arrive asynchronously.
-    snapshot =
-      Enum.into(subscribers, %{}, fn subscriber ->
-        {subscriber, Map.get(state.generations, subscriber, 0)}
-      end)
-
-    {:reply, snapshot, state}
   end
 
   @doc false
@@ -256,17 +229,20 @@ defmodule EventBus.Manager.Subscription do
     %{priority: priority, guard: guard}
   end
 
+  # Write opts + generation to ETS for lock-free reads on the hot path.
+  defp write_opts_to_ets(subscriber, opts, state) do
+    generation = Map.get(state.generations, subscriber, 0)
+    :ets.insert(@opts_table, {subscriber, Map.put(opts, :generation, generation)})
+  end
+
   defp reset_subscription_state(state, subscriber) do
-    # Any re-subscribe creates a new subscription version. We intentionally
-    # clear prior opts/limits so plain subscribe/1 replaces subscribe_n/2 or
-    # subscribe/2 rather than merging hidden state across subscriptions.
     state
     |> bump_generation(subscriber)
     |> clear_subscription_state(subscriber)
   end
 
   defp clear_subscription_state(state, subscriber) do
-    %{state | opts: Map.delete(state.opts, subscriber), limits: Map.delete(state.limits, subscriber)}
+    %{state | limits: Map.delete(state.limits, subscriber)}
   end
 
   defp bump_generation(state, subscriber) do
@@ -280,16 +256,11 @@ defmodule EventBus.Manager.Subscription do
     %{state | limits: Map.put(state.limits, subscriber, limit)}
   end
 
-  defp put_opts(state, subscriber, opts) do
-    %{state | opts: Map.put(state.opts, subscriber, opts)}
-  end
-
   defp maybe_decrement_limit(state, subscriber, generation) do
     case Map.get(state.limits, subscriber) do
       %{generation: ^generation, remaining: remaining} when remaining <= 1 ->
-        # Only consume the limit if the terminal event belongs to the currently
-        # active subscription generation.
         @backend.unsubscribe(subscriber)
+        :ets.delete(@opts_table, subscriber)
         clear_subscription_state(state, subscriber)
 
       %{generation: ^generation, remaining: remaining} ->
