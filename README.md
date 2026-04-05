@@ -27,6 +27,10 @@ Traceable, extendable and minimalist event bus implementation for Elixir with bu
 
 - [Subscribe to the 'event bus' with a subscriber and list of given topics](#subscribe-to-the-event-bus-with-a-subscriber-and-list-of-given-topics-notification-manager-will-match-with-regex)
 
+- [Subscribe with options (priority, guards)](#subscribe-with-options)
+
+- [Subscribe once or N times](#subscribe-once-or-n-times)
+
 - [Unsubscribe from the 'event bus'](#unsubscribe-from-the-event-bus)
 
 - [List subscribers](#list-subscribers)
@@ -45,6 +49,8 @@ Traceable, extendable and minimalist event bus implementation for Elixir with bu
 
 - [Mark as skipped on Event Observation Manager](#mark-as-skipped-on-event-observation-manager)
 
+- [Cancel event propagation](#cancel-event-propagation)
+
 - [Check if a topic exists?](#check-if-a-topic-exists)
 
 - [Use block builder to build `EventBus.Model.Event` struct](#use-block-builder-to-build-eventbusmodelevent-struct)
@@ -52,6 +58,8 @@ Traceable, extendable and minimalist event bus implementation for Elixir with bu
 - [Use block notifier to notify event data to given topic](#use-block-notifier-to-notify-event-data-to-given-topic)
 
 [Sample Subscriber Implementation](#sample-subscriber-implementation)
+
+[Debug Mode](#debug-mode)
 
 [Event Storage Details](#event-storage-details)
 
@@ -164,6 +172,47 @@ EventBus.subscribe({subscriber, [".*"]})
 > :ok
 ```
 
+##### Subscribe with options
+
+You can pass `:priority` and `:guard` options when subscribing.
+
+**Priority** controls dispatch order. Higher priority subscribers run first. Default is `0`.
+
+```elixir
+EventBus.subscribe({AuthValidator, ["order_.*"]}, priority: 100)
+EventBus.subscribe({OrderProcessor, ["order_.*"]}, priority: 0)
+EventBus.subscribe({AuditLogger, ["order_.*"]}, priority: -10)
+# Dispatch order: AuthValidator -> OrderProcessor -> AuditLogger
+```
+
+**Guards** filter events by content. The guard function receives the full `%Event{}` struct and must return a truthy value for the subscriber to be dispatched.
+
+```elixir
+EventBus.subscribe(
+  {BigOrderHandler, ["order_.*"]},
+  guard: fn event -> event.data.amount > 1000 end,
+  priority: 50
+)
+```
+
+If a guard returns falsy, the subscriber is marked as skipped. If a guard raises, the error is logged and the subscriber is skipped without affecting other subscribers.
+
+Calling `EventBus.subscribe/1` (without options) clears any previously set options for that subscriber.
+
+##### Subscribe once or N times
+
+Subscribers can auto-unsubscribe after a given number of terminal events (`mark_as_completed` or `mark_as_skipped`).
+
+```elixir
+# Unsubscribe after processing one event
+EventBus.subscribe_once({MySubscriber, ["order_created"]})
+
+# Unsubscribe after processing 5 events
+EventBus.subscribe_n({MySubscriber, ["order_created"]}, 5)
+```
+
+The count is decremented when the subscriber reaches a terminal state, not when `process/1` returns. This means async subscribers that call `mark_as_completed` later are counted correctly. Crashes also consume a count since EventBus marks the subscriber as skipped.
+
 ##### Unsubscribe from the 'event bus'
 ```elixir
 EventBus.unsubscribe(MyEventSubscriber)
@@ -270,6 +319,31 @@ subscriber = {MyEventSubscriber, config}
 EventBus.mark_as_skipped({subscriber, {:bye_received, id}})
 > :ok
 ```
+
+##### Cancel event propagation
+
+A subscriber can stop an event from being dispatched to remaining lower-priority subscribers during the synchronous `process/1` call. There are two ways to cancel:
+
+```elixir
+# Return {:cancel, reason}
+def process({topic, id}) do
+  event = EventBus.fetch_event({topic, id})
+  unless authorized?(event.data) do
+    {:cancel, "unauthorized"}
+  end
+end
+
+# Or raise EventBus.CancelEvent
+def process({topic, id}) do
+  raise EventBus.CancelEvent, reason: "validation failed"
+end
+```
+
+When cancellation happens:
+- Remaining lower-priority subscribers are marked as skipped.
+- A return-value cancellation (`{:cancel, reason}`) marks the cancelling subscriber as completed.
+- A raised `CancelEvent` marks the cancelling subscriber as skipped.
+- Regular exceptions (non-`CancelEvent`) do **not** cancel propagation.
 
 ##### Check if a topic exists?
 ```elixir
@@ -452,6 +526,34 @@ defmodule MyEventSubscriber do
   ...
 end
 ```
+
+## Debug Mode
+
+EventBus includes an opt-in debug mode that logs the full lifecycle of every event using `Logger.debug`.
+
+```elixir
+# Enable via config
+config :event_bus, debug: true
+
+# Or toggle at runtime
+EventBus.toggle_debug(true)
+EventBus.toggle_debug(false)
+```
+
+When enabled, the following events are logged:
+
+- `[EventBus] notify topic=:order_created id=abc123`
+- `[EventBus] dispatch topic=:order_created id=abc123 subscriber=OrderHandler`
+- `[EventBus] completed topic=:order_created id=abc123 subscriber=OrderHandler duration=1.2ms`
+- `[EventBus] skipped topic=:order_created id=abc123 subscriber=OrderHandler duration=1.2ms`
+- `[EventBus] cleaned topic=:order_created id=abc123`
+- `[EventBus] subscribe subscriber=OrderHandler patterns=["order_.*"]`
+- `[EventBus] unsubscribe subscriber=OrderHandler`
+- `[EventBus] register_topic topic=:order_created`
+
+Duration is measured from dispatch until the subscriber reaches a terminal state (`mark_as_completed` or `mark_as_skipped`), so it reflects real processing time even for async subscribers.
+
+Debug mode uses `Logger.put_module_level/2` to ensure debug logs are emitted regardless of the global Logger level.
 
 ## Event Storage Details
 
