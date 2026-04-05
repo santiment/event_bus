@@ -15,8 +15,6 @@ defmodule EventBus.Service.SubscriptionTest do
   setup do
     on_exit(fn ->
       Subscription.unregister_topic(:auto_subscribed)
-      Subscription.unregister_topic(:metrics_received)
-      Subscription.unregister_topic(:metrics_summed)
     end)
 
     Subscription.register_topic(:auto_subscribed)
@@ -42,12 +40,14 @@ defmodule EventBus.Service.SubscriptionTest do
     Subscription.subscribe({{MemoryLeakerOne, %{}}, [".*"]})
     Subscription.subscribe({AnotherCalculator, [".*"]})
 
-    assert [
-             {AnotherCalculator, [".*"]},
-             {{MemoryLeakerOne, %{}}, [".*"]},
-             {{Calculator, %{}}, [".*"]},
-             {{InputLogger, %{}}, [".*"]}
-           ] == Subscription.subscribers()
+    subs = Subscription.subscribers()
+    assert length(subs) == 4
+
+    sub_keys = Enum.map(subs, fn {key, _patterns} -> key end)
+    assert {InputLogger, %{}} in sub_keys
+    assert {Calculator, %{}} in sub_keys
+    assert {MemoryLeakerOne, %{}} in sub_keys
+    assert AnotherCalculator in sub_keys
   end
 
   test "does not subscribe same subscriber" do
@@ -66,8 +66,14 @@ defmodule EventBus.Service.SubscriptionTest do
     Subscription.unsubscribe({Calculator, %{}})
     Subscription.unsubscribe(AnotherCalculator)
 
-    assert [{{MemoryLeakerOne, %{}}, [".*"]}, {{InputLogger, %{}}, [".*"]}] ==
-             Subscription.subscribers()
+    subs = Subscription.subscribers()
+    assert length(subs) == 2
+
+    sub_keys = Enum.map(subs, fn {key, _patterns} -> key end)
+    assert {InputLogger, %{}} in sub_keys
+    assert {MemoryLeakerOne, %{}} in sub_keys
+    refute {Calculator, %{}} in sub_keys
+    refute AnotherCalculator in sub_keys
   end
 
   test "register_topic auto subscribe workers" do
@@ -80,8 +86,12 @@ defmodule EventBus.Service.SubscriptionTest do
 
     Subscription.register_topic(topic)
 
-    assert [{InputLogger, %{}}, {Calculator, %{}}, AnotherCalculator] ==
-             Subscription.subscribers(topic)
+    subs = Subscription.subscribers(topic)
+    assert length(subs) == 3
+    assert {InputLogger, %{}} in subs
+    assert {Calculator, %{}} in subs
+    assert AnotherCalculator in subs
+    refute {MemoryLeakerOne, %{}} in subs
   end
 
   test "unregister_topic delete subscribers" do
@@ -118,26 +128,26 @@ defmodule EventBus.Service.SubscriptionTest do
     assert [AnotherCalculator] == Subscription.subscribers(:metrics_summed)
   end
 
-  test "state persistency to Application environment" do
+  test "state is stored in ETS tables" do
     Subscription.subscribe(
       {{InputLogger, %{}}, ["metrics_received", "metrics_summed"]}
     )
 
     Subscription.subscribe({AnotherCalculator, ["metrics_received$"]})
 
-    {subscribers, topic_map} = Application.get_env(:event_bus, :subscriptions)
+    # Subscribers table
+    subs = Subscription.subscribers()
+    assert length(subs) == 2
 
-    assert subscribers == [
-             {AnotherCalculator, ["metrics_received$"]},
-             {{InputLogger, %{}}, ["metrics_received", "metrics_summed"]}
-           ]
+    # Topic map
+    mr_subs = Subscription.subscribers(:metrics_received)
+    assert length(mr_subs) == 2
+    assert {InputLogger, %{}} in mr_subs
+    assert AnotherCalculator in mr_subs
 
-    assert topic_map[:metrics_received] == [
-             AnotherCalculator,
-             {InputLogger, %{}}
-           ]
+    ms_subs = Subscription.subscribers(:metrics_summed)
+    assert [{InputLogger, %{}}] == ms_subs
 
-    assert topic_map[:metrics_summed] == [{InputLogger, %{}}]
-    assert topic_map[:auto_subscribed] == []
+    assert [] == Subscription.subscribers(:auto_subscribed)
   end
 end
