@@ -5,10 +5,10 @@ defmodule EventBus.Service.Notification do
 
   alias EventBus.CancelEvent
   alias EventBus.Manager.Observation, as: ObservationManager
-  alias EventBus.Manager.Store, as: StoreManager
-  alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
+  alias EventBus.Service.Observation, as: ObservationService
+  alias EventBus.Service.Store, as: StoreService
   alias EventBus.Service.Subscription, as: SubscriptionService
   alias EventBus.Telemetry
 
@@ -19,15 +19,15 @@ defmodule EventBus.Service.Notification do
   @doc false
   @spec notify(event()) :: :ok
   def notify(%Event{id: id, topic: topic} = event) do
-    subscribers = SubscriptionManager.subscribers(topic)
+    subscribers = SubscriptionService.subscribers(topic)
 
     if subscribers == [] do
       warn_missing_topic_subscription(topic)
     else
       Debug.log("notify topic=#{inspect(topic)} id=#{inspect(id)}")
 
-      :ok = StoreManager.create(event)
-      :ok = ObservationManager.create({subscribers, {topic, id}})
+      :ok = StoreService.create(event)
+      :ok = ObservationService.save({topic, id}, {subscribers, [], []})
 
       start_time = System.monotonic_time()
 
