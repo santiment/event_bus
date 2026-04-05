@@ -1,6 +1,8 @@
 defmodule EventBus.Service.ObservationTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias EventBus.Service.{Observation, Topic}
 
   alias EventBus.Support.Helper.{
@@ -70,7 +72,9 @@ defmodule EventBus.Service.ObservationTest do
 
     Observation.register_topic(topic)
 
-    assert nil == Observation.fetch({topic, id})
+    capture_log(fn ->
+      assert nil == Observation.fetch({topic, id})
+    end)
   end
 
   test "complete" do
@@ -109,5 +113,93 @@ defmodule EventBus.Service.ObservationTest do
 
     assert {subscribers, [], [{InputLogger, %{}}]} ==
              Observation.fetch({topic, id})
+  end
+
+  test "mark_as_completed is idempotent" do
+    topic = :idempotent_complete_test
+    id = "E1"
+    subscribers = [{InputLogger, %{}}, {Calculator, %{}}]
+
+    Observation.register_topic(topic)
+    Observation.save({topic, id}, {subscribers, [], []})
+
+    Observation.mark_as_completed({{InputLogger, %{}}, {topic, id}})
+    Observation.mark_as_completed({{InputLogger, %{}}, {topic, id}})
+    Observation.mark_as_completed({{InputLogger, %{}}, {topic, id}})
+
+    assert {subscribers, [{InputLogger, %{}}], []} ==
+             Observation.fetch({topic, id})
+  end
+
+  test "mark_as_skipped is idempotent" do
+    topic = :idempotent_skip_test
+    id = "E1"
+    subscribers = [{InputLogger, %{}}, {Calculator, %{}}]
+
+    Observation.register_topic(topic)
+    Observation.save({topic, id}, {subscribers, [], []})
+
+    Observation.mark_as_skipped({{InputLogger, %{}}, {topic, id}})
+    Observation.mark_as_skipped({{InputLogger, %{}}, {topic, id}})
+    Observation.mark_as_skipped({{InputLogger, %{}}, {topic, id}})
+
+    assert {subscribers, [], [{InputLogger, %{}}]} ==
+             Observation.fetch({topic, id})
+  end
+
+  test "first terminal state wins - completed then skipped" do
+    topic = :terminal_wins_test1
+    id = "E1"
+    subscribers = [{InputLogger, %{}}, {Calculator, %{}}]
+
+    Observation.register_topic(topic)
+    Observation.save({topic, id}, {subscribers, [], []})
+
+    Observation.mark_as_completed({{InputLogger, %{}}, {topic, id}})
+    Observation.mark_as_skipped({{InputLogger, %{}}, {topic, id}})
+
+    assert {subscribers, [{InputLogger, %{}}], []} ==
+             Observation.fetch({topic, id})
+  end
+
+  test "first terminal state wins - skipped then completed" do
+    topic = :terminal_wins_test2
+    id = "E1"
+    subscribers = [{InputLogger, %{}}, {Calculator, %{}}]
+
+    Observation.register_topic(topic)
+    Observation.save({topic, id}, {subscribers, [], []})
+
+    Observation.mark_as_skipped({{InputLogger, %{}}, {topic, id}})
+    Observation.mark_as_completed({{InputLogger, %{}}, {topic, id}})
+
+    assert {subscribers, [], [{InputLogger, %{}}]} ==
+             Observation.fetch({topic, id})
+  end
+
+  test "double complete does not prevent cleanup" do
+    topic = :double_complete_cleanup_test
+    id = "E1"
+    subscriber = {InputLogger, %{}}
+    subscribers = [subscriber]
+
+    # Register through the full Topic flow so ETS tables are owned by
+    # long-lived GenServers, not the test process.
+    Topic.register(topic)
+    Observation.save({topic, id}, {subscribers, [], []})
+
+    # Without idempotency fix, the second call would add a duplicate
+    # making length(completers) > length(subscribers) and preventing cleanup
+    Observation.mark_as_completed({subscriber, {topic, id}})
+
+    # Event should be cleaned up since the sole subscriber completed
+    capture_log(fn ->
+      assert nil == Observation.fetch({topic, id})
+    end)
+
+    # Second call should be a no-op (fetch inside returns nil, may log)
+    capture_log(fn ->
+      Observation.mark_as_completed({subscriber, {topic, id}})
+    end)
   end
 end

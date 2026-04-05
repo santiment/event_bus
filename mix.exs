@@ -37,9 +37,6 @@ defmodule EventBus.MixProject do
   defp deps do
     [
       {:telemetry, "~> 0.4 or ~> 1.0", optional: true},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:excoveralls, "~> 0.18", only: [:test], runtime: false},
       {:ex_doc, "~> 0.34", only: [:dev], runtime: false}
     ]
   end

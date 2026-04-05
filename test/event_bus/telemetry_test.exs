@@ -1,6 +1,8 @@
 defmodule EventBus.TelemetryTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias EventBus.Model.Event
   alias EventBus.Service.Notification
 
@@ -19,10 +21,6 @@ defmodule EventBus.TelemetryTest do
       :telemetry.detach("telemetry-test-start")
       :telemetry.detach("telemetry-test-stop")
       :telemetry.detach("telemetry-test-exception")
-
-      for {subscriber, _} <- EventBus.subscribers() do
-        EventBus.unsubscribe(subscriber)
-      end
 
       Process.sleep(100)
       EventBus.unregister_topic(@topic)
@@ -45,23 +43,25 @@ defmodule EventBus.TelemetryTest do
 
   describe "telemetry events on successful notify" do
     test "emits :start and :stop events", %{test_pid: test_pid} do
-      :telemetry.attach(
-        "telemetry-test-start",
-        [:event_bus, :notify, :start],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, event_name, measurements, metadata})
-        end,
-        nil
-      )
+      capture_log(fn ->
+        :telemetry.attach(
+          "telemetry-test-start",
+          [:event_bus, :notify, :start],
+          fn event_name, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event_name, measurements, metadata})
+          end,
+          nil
+        )
 
-      :telemetry.attach(
-        "telemetry-test-stop",
-        [:event_bus, :notify, :stop],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, event_name, measurements, metadata})
-        end,
-        nil
-      )
+        :telemetry.attach(
+          "telemetry-test-stop",
+          [:event_bus, :notify, :stop],
+          fn event_name, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event_name, measurements, metadata})
+          end,
+          nil
+        )
+      end)
 
       EventBus.subscribe({GoodSubscriber, ["telemetry_test_topic"]})
 
@@ -89,14 +89,16 @@ defmodule EventBus.TelemetryTest do
 
   describe "telemetry events on subscriber exception" do
     test "emits :exception event with duration and error details", %{test_pid: test_pid} do
-      :telemetry.attach(
-        "telemetry-test-exception",
-        [:event_bus, :notify, :exception],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, event_name, measurements, metadata})
-        end,
-        nil
-      )
+      capture_log(fn ->
+        :telemetry.attach(
+          "telemetry-test-exception",
+          [:event_bus, :notify, :exception],
+          fn event_name, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event_name, measurements, metadata})
+          end,
+          nil
+        )
+      end)
 
       EventBus.subscribe({FailingSubscriber, ["telemetry_test_topic"]})
 
@@ -106,7 +108,9 @@ defmodule EventBus.TelemetryTest do
         data: %{test: true}
       }
 
-      Notification.notify(event)
+      capture_log(fn ->
+        Notification.notify(event)
+      end)
 
       assert_receive {:telemetry, [:event_bus, :notify, :exception], measurements, metadata}
       assert is_integer(measurements.duration)
@@ -122,14 +126,16 @@ defmodule EventBus.TelemetryTest do
 
   describe "no telemetry events when no subscribers" do
     test "does not emit :start/:stop when topic has no subscribers", %{test_pid: test_pid} do
-      :telemetry.attach(
-        "telemetry-test-start",
-        [:event_bus, :notify, :start],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, event_name, measurements, metadata})
-        end,
-        nil
-      )
+      capture_log(fn ->
+        :telemetry.attach(
+          "telemetry-test-start",
+          [:event_bus, :notify, :start],
+          fn event_name, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event_name, measurements, metadata})
+          end,
+          nil
+        )
+      end)
 
       event = %Event{
         id: "telemetry-no-sub",
@@ -137,7 +143,9 @@ defmodule EventBus.TelemetryTest do
         data: %{test: true}
       }
 
-      Notification.notify(event)
+      capture_log(fn ->
+        Notification.notify(event)
+      end)
 
       refute_receive {:telemetry, [:event_bus, :notify, :start], _, _}, 100
     end

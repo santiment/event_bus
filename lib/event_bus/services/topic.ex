@@ -4,6 +4,7 @@ defmodule EventBus.Service.Topic do
   alias EventBus.Manager.Observation, as: ObservationManager
   alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Manager.Subscription, as: SubscriptionManager
+  alias EventBus.Service.Debug
 
   @typep topic :: EventBus.topic()
   @typep topics :: EventBus.topics()
@@ -38,6 +39,7 @@ defmodule EventBus.Service.Topic do
   @spec register(topic()) :: :ok
   def register(topic) do
     if !exist?(topic) do
+      Debug.log("register_topic topic=#{inspect(topic)}")
       Application.put_env(@app, @namespace, [topic | all()], persistent: true)
       Enum.each(@modules, fn mod -> mod.register_topic(topic) end)
     end
@@ -49,6 +51,7 @@ defmodule EventBus.Service.Topic do
   @spec unregister(topic()) :: :ok
   def unregister(topic) do
     if exist?(topic) do
+      Debug.log("unregister_topic topic=#{inspect(topic)}")
       Enum.each(@modules, fn mod -> mod.unregister_topic(topic) end)
       topics = List.delete(all(), topic)
       Application.put_env(@app, @namespace, topics, persistent: true)

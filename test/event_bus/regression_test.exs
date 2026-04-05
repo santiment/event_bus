@@ -22,10 +22,6 @@ defmodule EventBus.RegressionTest do
     EventBus.register_topic(@topic)
 
     on_exit(fn ->
-      for {subscriber, _} <- EventBus.subscribers() do
-        EventBus.unsubscribe(subscriber)
-      end
-
       # Allow async notification operations to drain before unregistering
       Process.sleep(100)
       EventBus.unregister_topic(@topic)
@@ -133,11 +129,13 @@ defmodule EventBus.RegressionTest do
         data: %{test: true}
       }
 
-      Notification.notify(event)
-      Process.sleep(200)
+      capture_log(fn ->
+        Notification.notify(event)
+        Process.sleep(200)
 
-      # Event should be cleaned up (all subscribers processed = skipped)
-      assert EventBus.fetch_event({@topic, "regression-169-skip"}) == nil
+        # Event should be cleaned up (all subscribers processed = skipped)
+        assert EventBus.fetch_event({@topic, "regression-169-skip"}) == nil
+      end)
     end
   end
 

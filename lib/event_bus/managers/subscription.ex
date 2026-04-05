@@ -44,6 +44,30 @@ defmodule EventBus.Manager.Subscription do
   end
 
   @doc """
+  Subscribe the subscriber to topic_patterns with options (guard, priority)
+  """
+  @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
+  def subscribe({subscriber, topic_patterns}, opts) do
+    GenServer.call(__MODULE__, {:subscribe_with_opts, {subscriber, topic_patterns}, opts})
+  end
+
+  @doc """
+  Subscribe the subscriber, auto-unsubscribe after one terminal event
+  """
+  @spec subscribe_once(subscriber_with_topic_patterns()) :: :ok
+  def subscribe_once({subscriber, topic_patterns}) do
+    GenServer.call(__MODULE__, {:subscribe_n, {subscriber, topic_patterns}, 1})
+  end
+
+  @doc """
+  Subscribe the subscriber, auto-unsubscribe after N terminal events
+  """
+  @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
+  def subscribe_n({subscriber, topic_patterns}, count) do
+    GenServer.call(__MODULE__, {:subscribe_n, {subscriber, topic_patterns}, count})
+  end
+
+  @doc """
   Unsubscribe the subscriber
   """
   @spec unsubscribe(subscriber()) :: :ok
@@ -111,6 +135,18 @@ defmodule EventBus.Manager.Subscription do
           {:reply, :ok, term()}
   def handle_call({:subscribe, {subscriber, topic_patterns}}, _from, state) do
     @backend.subscribe({subscriber, topic_patterns})
+    {:reply, :ok, state}
+  end
+
+  @doc false
+  def handle_call({:subscribe_n, {subscriber, topic_patterns}, count}, _from, state) do
+    @backend.subscribe_n({subscriber, topic_patterns}, count)
+    {:reply, :ok, state}
+  end
+
+  @doc false
+  def handle_call({:subscribe_with_opts, {subscriber, topic_patterns}, opts}, _from, state) do
+    @backend.subscribe({subscriber, topic_patterns}, opts)
     {:reply, :ok, state}
   end
 

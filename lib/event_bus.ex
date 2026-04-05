@@ -13,6 +13,7 @@ defmodule EventBus do
   }
 
   alias EventBus.Model.Event
+  alias EventBus.Service.Debug
 
   @typedoc "EventBus.Model.Event struct"
   @type event :: Event.t()
@@ -154,6 +155,56 @@ defmodule EventBus do
   defdelegate subscribe(subscriber_with_topic_patterns),
     to: Subscription,
     as: :subscribe
+
+  @doc """
+  Subscribe a subscriber with options.
+
+  Supported options:
+
+    * `:priority` - integer, higher runs first (default `0`)
+    * `:guard` - 1-arity function receiving `%Event{}`, return truthy to dispatch
+
+  ## Examples
+
+      EventBus.subscribe({MySubscriber, ["order_.*"]},
+        guard: fn event -> event.data.amount > 1000 end,
+        priority: 100
+      )
+      :ok
+
+  """
+  @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
+  defdelegate subscribe(subscriber_with_topic_patterns, opts),
+    to: Subscription,
+    as: :subscribe
+
+  @doc """
+  Subscribe a subscriber that auto-unsubscribes after one terminal event.
+
+  ## Examples
+
+      EventBus.subscribe_once({MyEventSubscriber, [".*"]})
+      :ok
+
+  """
+  @spec subscribe_once(subscriber_with_topic_patterns()) :: :ok
+  defdelegate subscribe_once(subscriber_with_topic_patterns),
+    to: Subscription,
+    as: :subscribe_once
+
+  @doc """
+  Subscribe a subscriber that auto-unsubscribes after N terminal events.
+
+  ## Examples
+
+      EventBus.subscribe_n({MyEventSubscriber, [".*"]}, 5)
+      :ok
+
+  """
+  @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
+  defdelegate subscribe_n(subscriber_with_topic_patterns, count),
+    to: Subscription,
+    as: :subscribe_n
 
   @doc """
   Unsubscribe a subscriber from the event bus.
@@ -304,4 +355,24 @@ defmodule EventBus do
   defdelegate mark_as_skipped(subscriber_with_event_ref),
     to: Observation,
     as: :mark_as_skipped
+
+  @doc """
+  Toggle debug mode on or off.
+
+  When enabled, EventBus logs the full lifecycle of every event
+  using `Logger.debug/1`.
+
+  ## Examples
+
+      EventBus.toggle_debug(true)
+      :ok
+
+      EventBus.toggle_debug(false)
+      :ok
+
+  """
+  @spec toggle_debug(boolean()) :: :ok
+  defdelegate toggle_debug(enabled),
+    to: Debug,
+    as: :toggle
 end

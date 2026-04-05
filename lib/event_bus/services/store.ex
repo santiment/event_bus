@@ -4,7 +4,6 @@ defmodule EventBus.Service.Store do
   require Logger
 
   alias EventBus.Model.Event
-  alias :ets, as: Ets
 
   @typep event :: EventBus.event()
   @typep event_shadow :: EventBus.event_shadow()
@@ -22,21 +21,21 @@ defmodule EventBus.Service.Store do
   @doc false
   @spec register_topic(topic()) :: :ok
   def register_topic(topic) do
-    if !exist?(topic), do: Ets.new(table_name(topic), @ets_opts)
+    if !exist?(topic), do: :ets.new(table_name(topic), @ets_opts)
     :ok
   end
 
   @doc false
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
-    if exist?(topic), do: Ets.delete(table_name(topic))
+    if exist?(topic), do: :ets.delete(table_name(topic))
     :ok
   end
 
   @doc false
   @spec fetch(event_shadow()) :: event() | nil
   def fetch({topic, id}) do
-    case Ets.lookup(table_name(topic), id) do
+    case :ets.lookup(table_name(topic), id) do
       [{_, %Event{} = event}] ->
         event
 
@@ -59,14 +58,14 @@ defmodule EventBus.Service.Store do
   @doc false
   @spec delete(event_shadow()) :: :ok
   def delete({topic, id}) do
-    Ets.delete(table_name(topic), id)
+    if exist?(topic), do: :ets.delete(table_name(topic), id)
     :ok
   end
 
   @doc false
   @spec create(event()) :: :ok
   def create(%Event{id: id, topic: topic} = event) do
-    Ets.insert(table_name(topic), {id, event})
+    :ets.insert(table_name(topic), {id, event})
     :ok
   end
 

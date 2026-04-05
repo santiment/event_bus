@@ -1,5 +1,8 @@
 defmodule EventBus.EventSourceTest do
   use ExUnit.Case
+
+  import ExUnit.CaptureLog
+
   use EventBus.EventSource
 
   doctest EventSource
@@ -36,8 +39,8 @@ defmodule EventBus.EventSourceTest do
     assert event.transaction_id == transaction_id
     assert event.ttl == ttl
     assert event.source == "me"
-    refute is_nil(event.initialized_at)
-    refute is_nil(event.occurred_at)
+    assert is_integer(event.initialized_at)
+    assert is_integer(event.occurred_at)
     assert Event.duration(event) > 0
   end
 
@@ -99,8 +102,8 @@ defmodule EventBus.EventSourceTest do
     assert event.transaction_id == transaction_id
     assert event.ttl == ttl
     assert event.source == "EventBus.EventSourceTest"
-    refute is_nil(event.initialized_at)
-    refute is_nil(event.occurred_at)
+    assert is_integer(event.initialized_at)
+    assert is_integer(event.occurred_at)
   end
 
   test "notify" do
@@ -108,11 +111,13 @@ defmodule EventBus.EventSourceTest do
     topic = :user_created
     data = %{id: 1, name: "me", email: "me@example.com"}
 
-    result =
-      EventSource.notify %{id: id, topic: topic} do
-        data
-      end
+    capture_log(fn ->
+      result =
+        EventSource.notify %{id: id, topic: topic} do
+          data
+        end
 
-    assert result == data
+      assert result == data
+    end)
   end
 end
