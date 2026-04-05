@@ -5,7 +5,6 @@ defmodule EventBus do
   """
 
   alias EventBus.Manager.{
-    Observation,
     Subscription,
     Topic
   }
@@ -13,6 +12,7 @@ defmodule EventBus do
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
   alias EventBus.Service.Notification, as: NotificationService
+  alias EventBus.Service.Observation, as: ObservationService
   alias EventBus.Service.Store, as: StoreService
 
   @typedoc "EventBus.Model.Event struct"
@@ -358,9 +358,11 @@ defmodule EventBus do
 
   """
   @spec mark_as_completed(subscriber_with_event_ref()) :: :ok
-  defdelegate mark_as_completed(subscriber_with_event_ref),
-    to: Observation,
-    as: :mark_as_completed
+  def mark_as_completed({subscriber, {topic, id}}),
+    do: ObservationService.mark_as_completed({subscriber, {topic, id}})
+
+  def mark_as_completed({subscriber, topic, id}),
+    do: ObservationService.mark_as_completed({subscriber, {topic, id}})
 
   @doc """
   Mark the event as skipped for the subscriber.
@@ -377,9 +379,11 @@ defmodule EventBus do
 
   """
   @spec mark_as_skipped(subscriber_with_event_ref()) :: :ok
-  defdelegate mark_as_skipped(subscriber_with_event_ref),
-    to: Observation,
-    as: :mark_as_skipped
+  def mark_as_skipped({subscriber, {topic, id}}),
+    do: ObservationService.mark_as_skipped({subscriber, {topic, id}})
+
+  def mark_as_skipped({subscriber, topic, id}),
+    do: ObservationService.mark_as_skipped({subscriber, {topic, id}})
 
   @doc """
   Toggle debug mode on or off.

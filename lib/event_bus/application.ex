@@ -4,7 +4,6 @@ defmodule EventBus.Application do
   use Application
 
   alias EventBus.Manager.{
-    Observation,
     Subscription,
     Topic
   }
@@ -23,8 +22,7 @@ defmodule EventBus.Application do
     children = [
       {Task.Supervisor, name: EventBus.TaskSupervisor},
       Topic,
-      Subscription,
-      Observation
+      Subscription
     ]
 
     opts = [strategy: :one_for_one, name: EventBus.Supervisor]

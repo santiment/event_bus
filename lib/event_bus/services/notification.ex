@@ -4,7 +4,6 @@ defmodule EventBus.Service.Notification do
   require Logger
 
   alias EventBus.CancelEvent
-  alias EventBus.Manager.Observation, as: ObservationManager
   alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
@@ -77,7 +76,7 @@ defmodule EventBus.Service.Notification do
     Enum.each(subscribers, fn subscriber ->
       sub_key = subscriber_key(subscriber)
       Debug.log("skipped_by_cancel topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}")
-      ObservationManager.mark_as_skipped({sub_key, {topic, id}})
+      ObservationService.mark_as_skipped({sub_key, {topic, id}})
     end)
   end
 
@@ -104,7 +103,7 @@ defmodule EventBus.Service.Notification do
         do_dispatch(subscriber, {topic, id}, start_time)
 
       :skip ->
-        ObservationManager.mark_as_skipped({sub_key, {topic, id}})
+        ObservationService.mark_as_skipped({sub_key, {topic, id}})
         :ok
     end
   end
@@ -131,7 +130,7 @@ defmodule EventBus.Service.Notification do
 
     case subscriber.process({config, topic, id}) do
       {:cancel, reason} ->
-        ObservationManager.mark_as_completed({sub_key, {topic, id}})
+        ObservationService.mark_as_completed({sub_key, {topic, id}})
         Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}")
         :cancelled
 
@@ -143,7 +142,7 @@ defmodule EventBus.Service.Notification do
       case error do
         %CancelEvent{reason: reason} ->
           Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect({subscriber, config})} reason=#{inspect(reason)}")
-          ObservationManager.mark_as_skipped({{subscriber, config}, {topic, id}})
+          ObservationService.mark_as_skipped({{subscriber, config}, {topic, id}})
           :cancelled
 
         _ ->
@@ -151,7 +150,7 @@ defmodule EventBus.Service.Notification do
           duration = System.monotonic_time() - start_time
           log_error(subscriber, error, stacktrace)
           emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace)
-          ObservationManager.mark_as_skipped({{subscriber, config}, {topic, id}})
+          ObservationService.mark_as_skipped({{subscriber, config}, {topic, id}})
           :ok
       end
   end
@@ -162,7 +161,7 @@ defmodule EventBus.Service.Notification do
 
     case subscriber.process({topic, id}) do
       {:cancel, reason} ->
-        ObservationManager.mark_as_completed({subscriber, {topic, id}})
+        ObservationService.mark_as_completed({subscriber, {topic, id}})
         Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(subscriber)} reason=#{inspect(reason)}")
         :cancelled
 
@@ -174,7 +173,7 @@ defmodule EventBus.Service.Notification do
       case error do
         %CancelEvent{reason: reason} ->
           Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(subscriber)} reason=#{inspect(reason)}")
-          ObservationManager.mark_as_skipped({subscriber, {topic, id}})
+          ObservationService.mark_as_skipped({subscriber, {topic, id}})
           :cancelled
 
         _ ->
@@ -182,7 +181,7 @@ defmodule EventBus.Service.Notification do
           duration = System.monotonic_time() - start_time
           log_error(subscriber, error, stacktrace)
           emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace)
-          ObservationManager.mark_as_skipped({subscriber, {topic, id}})
+          ObservationService.mark_as_skipped({subscriber, {topic, id}})
           :ok
       end
   end
