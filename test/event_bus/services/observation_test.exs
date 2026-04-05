@@ -165,6 +165,40 @@ defmodule EventBus.Service.ObservationTest do
              Observation.fetch({topic, id})
   end
 
+  test "emits telemetry event on observation complete" do
+    topic = :telemetry_complete_test
+    id = "E1"
+    subscriber = {InputLogger, %{}}
+    subscribers = [subscriber]
+    test_pid = self()
+
+    handler_id = "obs-complete-test"
+
+    capture_log(fn ->
+      :telemetry.attach(
+        handler_id,
+        [:event_bus, :observation, :complete],
+        fn event_name, measurements, metadata, _config ->
+          send(test_pid, {:telemetry, event_name, measurements, metadata})
+        end,
+        nil
+      )
+    end)
+
+    Store.create(%EventBus.Model.Event{id: id, topic: topic, data: nil})
+    Observation.save({topic, id}, {subscribers, [], []})
+    Observation.mark_as_completed({subscriber, {topic, id}})
+
+    assert_receive {:telemetry, [:event_bus, :observation, :complete], measurements, metadata}
+    assert measurements.subscriber_count == 1
+    assert metadata.topic == topic
+    assert metadata.event_id == id
+    assert metadata.completers == [subscriber]
+    assert metadata.skippers == []
+
+    :telemetry.detach(handler_id)
+  end
+
   test "double complete does not prevent cleanup" do
     topic = :double_complete_cleanup_test
     id = "E1"

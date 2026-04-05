@@ -3,9 +3,10 @@ defmodule EventBus.Service.Observation do
 
   require Logger
 
-  alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Service.Debug
+  alias EventBus.Service.Store, as: StoreService
   alias EventBus.Service.Subscription, as: SubscriptionService
+  alias EventBus.Telemetry
 
   @typep event_shadow :: EventBus.event_shadow()
   @typep subscribers :: EventBus.subscribers()
@@ -122,7 +123,7 @@ defmodule EventBus.Service.Observation do
   @spec save_or_delete(event_shadow(), watcher()) :: :ok
   defp save_or_delete({topic, id}, watcher) do
     if complete?(watcher) do
-      delete_with_relations({topic, id})
+      on_complete({topic, id}, watcher)
     else
       :ets.insert(@table, {{topic, id}, watcher})
     end
@@ -130,12 +131,30 @@ defmodule EventBus.Service.Observation do
     :ok
   end
 
-  @spec delete_with_relations(event_shadow()) :: :ok
-  defp delete_with_relations({topic, id}) do
+  @spec on_complete(event_shadow(), watcher()) :: :ok
+  defp on_complete({topic, id}, {subscribers, completers, skippers}) do
     Debug.log("cleaned topic=#{inspect(topic)} id=#{inspect(id)}")
     Debug.clean_dispatch_metadata(topic, id)
-    StoreManager.delete({topic, id})
+
+    Telemetry.execute(
+      [:event_bus, :observation, :complete],
+      %{subscriber_count: length(subscribers)},
+      %{
+        topic: topic,
+        event_id: id,
+        completers: completers,
+        skippers: skippers
+      }
+    )
+
+    # Delete watcher entry
     :ets.delete(@table, {topic, id})
+
+    # Default cleanup: delete event from store
+    # Future retention policies (dead letter, sticky) can override
+    # this by handling the telemetry event above and skipping or
+    # replacing this deletion.
+    StoreService.delete({topic, id})
 
     :ok
   end
