@@ -4,16 +4,14 @@ defmodule EventBus do
   built-in event store and event observation manager based on ETS.
   """
 
-  alias EventBus.Manager.{
-    Subscription,
-    Topic
-  }
+  alias EventBus.Manager.Subscription
 
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
   alias EventBus.Service.Notification, as: NotificationService
   alias EventBus.Service.Observation, as: ObservationService
   alias EventBus.Service.Store, as: StoreService
+  alias EventBus.Service.Topic, as: TopicService
 
   @typedoc "EventBus.Model.Event struct"
   @type event :: Event.t()
@@ -117,7 +115,7 @@ defmodule EventBus do
   """
   @spec topic_exist?(topic()) :: boolean()
   defdelegate topic_exist?(topic),
-    to: Topic,
+    to: TopicService,
     as: :exist?
 
   @doc """
@@ -131,7 +129,7 @@ defmodule EventBus do
   """
   @spec topics() :: topics()
   defdelegate topics,
-    to: Topic,
+    to: TopicService,
     as: :all
 
   @doc """
@@ -145,7 +143,7 @@ defmodule EventBus do
   """
   @spec register_topic(topic()) :: :ok
   defdelegate register_topic(topic),
-    to: Topic,
+    to: TopicService,
     as: :register
 
   @doc """
@@ -159,7 +157,7 @@ defmodule EventBus do
   """
   @spec unregister_topic(topic()) :: :ok
   defdelegate unregister_topic(topic),
-    to: Topic,
+    to: TopicService,
     as: :unregister
 
   @doc """

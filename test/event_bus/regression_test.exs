@@ -143,7 +143,7 @@ defmodule EventBus.RegressionTest do
 
   describe "register_from_config/0" do
     test "registers configured topics and consolidated ETS tables exist" do
-      EventBus.Manager.Topic.register_from_config()
+      EventBus.Service.Topic.register_from_config()
       configured_topics = Application.get_env(:event_bus, :topics, [])
 
       assert length(configured_topics) > 0, "Config should have topics"

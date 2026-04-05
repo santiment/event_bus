@@ -1,8 +1,6 @@
-defmodule EventBus.Manager.TopicTest do
+defmodule EventBus.Service.TopicEtsTest do
   use ExUnit.Case, async: false
-  alias EventBus.Manager.Topic
-
-  doctest Topic
+  alias EventBus.Service.Topic
 
   setup do
     on_exit(fn ->
@@ -13,21 +11,26 @@ defmodule EventBus.Manager.TopicTest do
     :ok
   end
 
-  test "exist?" do
+  test "exist? after register" do
     topic = :metrics_received_1
     Topic.register(topic)
 
     assert Topic.exist?(topic)
   end
 
-  test "register_topic" do
-    assert :ok == Topic.register(:t1)
+  test "register is idempotent" do
+    Topic.register(:t1)
+    count = length(Topic.all())
+    Topic.register(:t1)
+
+    assert count == length(Topic.all())
   end
 
-  test "unregister_topic" do
+  test "unregister removes topic" do
     topic = :t2
     Topic.register(topic)
+    Topic.unregister(topic)
 
-    assert :ok == Topic.unregister(topic)
+    refute Topic.exist?(topic)
   end
 end
