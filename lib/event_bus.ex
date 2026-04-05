@@ -6,7 +6,6 @@ defmodule EventBus do
 
   alias EventBus.Manager.{
     Observation,
-    Store,
     Subscription,
     Topic
   }
@@ -14,6 +13,7 @@ defmodule EventBus do
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
   alias EventBus.Service.Notification, as: NotificationService
+  alias EventBus.Service.Store, as: StoreService
 
   @typedoc "EventBus.Model.Event struct"
   @type event :: Event.t()
@@ -321,7 +321,7 @@ defmodule EventBus do
   """
   @spec fetch_event(event_shadow()) :: event() | nil
   defdelegate fetch_event(event_shadow),
-    to: Store,
+    to: StoreService,
     as: :fetch
 
   @doc """
@@ -334,7 +334,7 @@ defmodule EventBus do
   """
   @spec fetch_event_data(event_shadow()) :: any()
   defdelegate fetch_event_data(event_shadow),
-    to: Store,
+    to: StoreService,
     as: :fetch_data
 
   @doc """

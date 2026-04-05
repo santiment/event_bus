@@ -5,7 +5,6 @@ defmodule EventBus.Application do
 
   alias EventBus.Manager.{
     Observation,
-    Store,
     Subscription,
     Topic
   }
@@ -25,7 +24,6 @@ defmodule EventBus.Application do
       {Task.Supervisor, name: EventBus.TaskSupervisor},
       Topic,
       Subscription,
-      Store,
       Observation
     ]
 

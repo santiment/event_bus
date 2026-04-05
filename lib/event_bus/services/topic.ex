@@ -2,16 +2,16 @@ defmodule EventBus.Service.Topic do
   @moduledoc false
 
   alias EventBus.Manager.Observation, as: ObservationManager
-  alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Service.Debug
+  alias EventBus.Service.Store, as: StoreService
 
   @typep topic :: EventBus.topic()
   @typep topics :: EventBus.topics()
 
   @app :event_bus
   @namespace :topics
-  @modules [StoreManager, SubscriptionManager, ObservationManager]
+  @modules [StoreService, SubscriptionManager, ObservationManager]
 
   @doc false
   @spec all() :: topics()
