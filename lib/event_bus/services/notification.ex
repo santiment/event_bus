@@ -5,11 +5,11 @@ defmodule EventBus.Service.Notification do
 
   alias EventBus.CancelEvent
   alias EventBus.Manager.Observation, as: ObservationManager
+  alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
   alias EventBus.Service.Observation, as: ObservationService
   alias EventBus.Service.Store, as: StoreService
-  alias EventBus.Service.Subscription, as: SubscriptionService
   alias EventBus.Telemetry
 
   @typep event :: EventBus.event()
@@ -19,7 +19,7 @@ defmodule EventBus.Service.Notification do
   @doc false
   @spec notify(event()) :: :ok
   def notify(%Event{id: id, topic: topic} = event) do
-    subscribers = SubscriptionService.subscribers(topic)
+    subscribers = SubscriptionManager.subscribers(topic)
 
     if subscribers == [] do
       warn_missing_topic_subscription(topic)
@@ -28,6 +28,9 @@ defmodule EventBus.Service.Notification do
 
       :ok = StoreService.create(event)
       :ok = ObservationService.save({topic, id}, {subscribers, [], []})
+      # Persist the subscription versions that were active for this event so
+      # later async completions/skips cannot mutate a newer re-subscription.
+      :ok = ObservationService.save_snapshot({topic, id}, SubscriptionManager.snapshot_generations(subscribers))
 
       start_time = System.monotonic_time()
 
@@ -83,16 +86,18 @@ defmodule EventBus.Service.Notification do
   end
 
   defp fetch_priority({_subscriber, _config} = sub) do
-    SubscriptionService.fetch_opts(sub).priority
+    SubscriptionManager.fetch_opts(sub).priority
   end
 
   defp fetch_priority(subscriber) do
-    SubscriptionService.fetch_opts(subscriber).priority
+    SubscriptionManager.fetch_opts(subscriber).priority
   end
 
   defp dispatch_subscriber(subscriber, event, {topic, id}, start_time) do
     sub_key = subscriber_key(subscriber)
-    opts = SubscriptionService.fetch_opts(sub_key)
+    # Guard/priority data is read through the manager so it stays private and
+    # validated instead of being exposed in public ETS.
+    opts = SubscriptionManager.fetch_opts(sub_key)
 
     case evaluate_guard(opts.guard, event, sub_key, topic, id) do
       :pass ->

@@ -6,8 +6,6 @@ defmodule EventBus.Service.Subscription do
 
   @subscribers_table :eb_subscribers
   @topic_map_table :eb_topic_subscribers
-  @limits_table :eb_subscription_limits
-  @opts_table :eb_subscription_opts
 
   @typep subscriber :: EventBus.subscriber()
   @typep subscribers :: EventBus.subscribers()
@@ -31,7 +29,7 @@ defmodule EventBus.Service.Subscription do
   @doc false
   @spec setup_tables() :: :ok
   def setup_tables do
-    for table <- [@subscribers_table, @topic_map_table, @limits_table, @opts_table] do
+    for table <- [@subscribers_table, @topic_map_table] do
       if :ets.info(table) == :undefined do
         :ets.new(table, @ets_opts)
       end
@@ -44,45 +42,8 @@ defmodule EventBus.Service.Subscription do
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topics}) do
     Debug.log("subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}")
-    clear_limit(subscriber)
-    clear_opts(subscriber)
-
     :ets.insert(@subscribers_table, {subscriber, topics})
     rebuild_topic_map_for_subscriber(subscriber, topics)
-
-    :ok
-  end
-
-  @doc false
-  @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
-  def subscribe({subscriber, topics}, opts) when is_list(opts) do
-    subscribe({subscriber, topics})
-    store_opts(subscriber, opts)
-    :ok
-  end
-
-  @doc false
-  @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
-  def subscribe_n({subscriber, topics}, count) when is_integer(count) and count > 0 do
-    subscribe({subscriber, topics})
-    :ets.insert(@limits_table, {subscriber, count})
-    :ok
-  end
-
-  @doc false
-  @spec decrement_limit(term()) :: :ok
-  def decrement_limit(subscriber) do
-    case :ets.lookup(@limits_table, subscriber) do
-      [{^subscriber, count}] when count <= 1 ->
-        :ets.delete(@limits_table, subscriber)
-        unsubscribe(subscriber)
-
-      [{^subscriber, count}] ->
-        :ets.insert(@limits_table, {subscriber, count - 1})
-
-      [] ->
-        :ok
-    end
 
     :ok
   end
@@ -91,9 +52,6 @@ defmodule EventBus.Service.Subscription do
   @spec unsubscribe(subscriber()) :: :ok
   def unsubscribe(subscriber) do
     Debug.log("unsubscribe subscriber=#{inspect(subscriber)}")
-    clear_limit(subscriber)
-    clear_opts(subscriber)
-
     :ets.delete(@subscribers_table, subscriber)
     remove_subscriber_from_all_topics(subscriber)
 
@@ -159,37 +117,5 @@ defmodule EventBus.Service.Subscription do
     |> Enum.reduce([], fn {subscriber, patterns}, acc ->
       if RegexUtil.superset?(patterns, topic), do: [subscriber | acc], else: acc
     end)
-  end
-
-  defp clear_limit(subscriber) do
-    if :ets.info(@limits_table) != :undefined do
-      :ets.delete(@limits_table, subscriber)
-    end
-
-    :ok
-  end
-
-  defp store_opts(subscriber, opts) do
-    priority = Keyword.get(opts, :priority, 0)
-    guard = Keyword.get(opts, :guard)
-    :ets.insert(@opts_table, {subscriber, %{priority: priority, guard: guard}})
-    :ok
-  end
-
-  defp clear_opts(subscriber) do
-    if :ets.info(@opts_table) != :undefined do
-      :ets.delete(@opts_table, subscriber)
-    end
-
-    :ok
-  end
-
-  @doc false
-  @spec fetch_opts(term()) :: %{priority: integer(), guard: function() | nil}
-  def fetch_opts(subscriber) do
-    case :ets.lookup(@opts_table, subscriber) do
-      [{^subscriber, opts}] -> opts
-      [] -> %{priority: 0, guard: nil}
-    end
   end
 end

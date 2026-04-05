@@ -3,9 +3,9 @@ defmodule EventBus.Service.Observation do
 
   require Logger
 
+  alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Service.Debug
   alias EventBus.Service.Store, as: StoreService
-  alias EventBus.Service.Subscription, as: SubscriptionService
   alias EventBus.Telemetry
 
   @typep event_shadow :: EventBus.event_shadow()
@@ -15,6 +15,10 @@ defmodule EventBus.Service.Observation do
   @typep watcher :: {subscribers(), subscribers(), subscribers()}
 
   @table :eb_event_watchers
+  # Stores the per-subscriber subscription generation captured at dispatch time
+  # for each event_shadow. Observation consults this snapshot before consuming a
+  # subscribe_once/subscribe_n counter.
+  @snapshot_table :eb_event_subscription_generations
   @table_opts [
     :set,
     :public,
@@ -26,8 +30,10 @@ defmodule EventBus.Service.Observation do
   @doc false
   @spec setup_table() :: :ok
   def setup_table do
-    if :ets.info(@table) == :undefined do
-      :ets.new(@table, @table_opts)
+    for table <- [@table, @snapshot_table] do
+      if :ets.info(table) == :undefined do
+        :ets.new(table, @table_opts)
+      end
     end
 
     :ok
@@ -45,6 +51,7 @@ defmodule EventBus.Service.Observation do
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
     :ets.match_delete(@table, {{topic, :_}, :_})
+    :ets.match_delete(@snapshot_table, {{topic, :_}, :_})
     :ok
   end
 
@@ -57,7 +64,7 @@ defmodule EventBus.Service.Observation do
           :ok
         else
           Debug.log_terminal("completed", subscriber, topic, id)
-          SubscriptionService.decrement_limit(subscriber)
+          decrement_limit(subscriber, event_shadow)
 
           save_or_delete(
             event_shadow,
@@ -79,7 +86,7 @@ defmodule EventBus.Service.Observation do
           :ok
         else
           Debug.log_terminal("skipped", subscriber, topic, id)
-          SubscriptionService.decrement_limit(subscriber)
+          decrement_limit(subscriber, event_shadow)
 
           save_or_delete(
             event_shadow,
@@ -113,6 +120,13 @@ defmodule EventBus.Service.Observation do
   @spec save(event_shadow(), watcher()) :: :ok
   def save({topic, id}, watcher) do
     save_or_delete({topic, id}, watcher)
+  end
+
+  @doc false
+  @spec save_snapshot(event_shadow(), %{optional(EventBus.subscriber()) => non_neg_integer()}) :: :ok
+  def save_snapshot({topic, id}, snapshot) do
+    :ets.insert(@snapshot_table, {{topic, id}, snapshot})
+    :ok
   end
 
   @spec complete?(watcher()) :: boolean()
@@ -149,6 +163,7 @@ defmodule EventBus.Service.Observation do
 
     # Delete watcher entry
     :ets.delete(@table, {topic, id})
+    :ets.delete(@snapshot_table, {topic, id})
 
     # Default cleanup: delete event from store
     # Future retention policies (dead letter, sticky) can override
@@ -157,5 +172,20 @@ defmodule EventBus.Service.Observation do
     StoreService.delete({topic, id})
 
     :ok
+  end
+
+  defp decrement_limit(subscriber, event_shadow) do
+    # Terminal callbacks can arrive long after dispatch. Using the saved
+    # generation ensures we only decrement the limit of the subscription that
+    # actually received this event.
+    generation = snapshot_generation(event_shadow, subscriber)
+    SubscriptionManager.decrement_limit(subscriber, generation)
+  end
+
+  defp snapshot_generation({topic, id}, subscriber) do
+    case :ets.lookup(@snapshot_table, {topic, id}) do
+      [{{^topic, ^id}, snapshot}] -> Map.get(snapshot, subscriber, 0)
+      _ -> 0
+    end
   end
 end
