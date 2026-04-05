@@ -54,16 +54,18 @@ defmodule EventBus.Service.NotificationTest do
     # This subscriber deos not have a config!!!
     EventBus.subscribe({AnotherCalculator, ["metrics_received$"]})
 
+    Logger.put_module_level(InputLogger, :info)
+
     logs =
       capture_log(fn ->
         Notification.notify(@event)
         Process.sleep(200)
       end)
 
+    Logger.delete_module_level(InputLogger)
+
     assert String.contains?(logs, "BadOne.process/1 raised an error!")
-
     assert String.contains?(logs, "AnotherBadOne.process/1 raised an error!")
-
     assert String.contains?(logs, "I don't want to handle your event")
 
     assert String.contains?(logs, "Event log for %EventBus.Model.Event{")

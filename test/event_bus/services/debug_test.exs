@@ -5,6 +5,7 @@ defmodule EventBus.Service.DebugTest do
 
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
+  alias EventBus.Service.Notification
 
   @topic :debug_test_topic
 
@@ -70,15 +71,14 @@ defmodule EventBus.Service.DebugTest do
 
     logs =
       capture_log([level: :debug], fn ->
-        EventBus.notify(event)
-        Process.sleep(200)
+        Notification.notify(event)
       end)
 
     refute logs =~ "[EventBus]"
   end
 
   test "logs full event lifecycle when debug is enabled" do
-    Debug.toggle(true)
+    # Subscribe before enabling debug so the subscribe log doesn't leak
     EventBus.subscribe({CompletingSubscriber, ["debug_test_topic"]})
 
     event = %Event{
@@ -89,8 +89,10 @@ defmodule EventBus.Service.DebugTest do
 
     logs =
       capture_log([level: :debug], fn ->
-        EventBus.notify(event)
-        Process.sleep(200)
+        Debug.toggle(true)
+        Notification.notify(event)
+        # mark_as_completed goes through Observation GenServer cast
+        Process.sleep(100)
       end)
 
     # Notify log
@@ -109,10 +111,9 @@ defmodule EventBus.Service.DebugTest do
   end
 
   test "logs subscribe and unsubscribe" do
-    Debug.toggle(true)
-
     logs =
       capture_log([level: :debug], fn ->
+        Debug.toggle(true)
         EventBus.subscribe({CompletingSubscriber, ["debug_test_topic"]})
       end)
 
@@ -130,11 +131,11 @@ defmodule EventBus.Service.DebugTest do
   end
 
   test "logs topic registration" do
-    Debug.toggle(true)
     topic = :debug_register_test
 
     logs =
       capture_log([level: :debug], fn ->
+        Debug.toggle(true)
         EventBus.register_topic(topic)
       end)
 
@@ -149,8 +150,6 @@ defmodule EventBus.Service.DebugTest do
   end
 
   test "logs skipped for crashing subscriber" do
-    Debug.toggle(true)
-
     defmodule CrashingSubscriber do
       def process(_), do: raise("crash")
     end
@@ -165,8 +164,10 @@ defmodule EventBus.Service.DebugTest do
 
     logs =
       capture_log([level: :debug], fn ->
-        EventBus.notify(event)
-        Process.sleep(200)
+        Debug.toggle(true)
+        Notification.notify(event)
+        # mark_as_skipped goes through Observation GenServer cast
+        Process.sleep(100)
       end)
 
     assert logs =~ "[EventBus] skipped topic=:debug_test_topic id=\"debug-crash-1\""
@@ -174,12 +175,15 @@ defmodule EventBus.Service.DebugTest do
   end
 
   test "dispatch metadata is cleaned up after event completion" do
-    Debug.toggle(true)
     EventBus.subscribe({CompletingSubscriber, ["debug_test_topic"]})
 
     event = %Event{id: "debug-cleanup-1", topic: @topic, data: %{}}
-    EventBus.notify(event)
-    Process.sleep(200)
+
+    capture_log([level: :debug], fn ->
+      Debug.toggle(true)
+      Notification.notify(event)
+      Process.sleep(100)
+    end)
 
     # After completion and cleanup, dispatch metadata should be gone
     assert :not_found ==
@@ -191,7 +195,6 @@ defmodule EventBus.Service.DebugTest do
   end
 
   test "works with configured subscribers" do
-    Debug.toggle(true)
     EventBus.subscribe({{ConfigSubscriber, %{key: "val"}}, ["debug_test_topic"]})
 
     event = %Event{
@@ -202,8 +205,9 @@ defmodule EventBus.Service.DebugTest do
 
     logs =
       capture_log([level: :debug], fn ->
-        EventBus.notify(event)
-        Process.sleep(200)
+        Debug.toggle(true)
+        Notification.notify(event)
+        Process.sleep(100)
       end)
 
     assert logs =~ "[EventBus] dispatch"
