@@ -142,22 +142,23 @@ defmodule EventBus.RegressionTest do
   # -- Topic.register_from_config/0 --
 
   describe "register_from_config/0" do
-    test "registers configured topics with store and observation ETS tables" do
-      # Re-register from config to ensure clean state regardless of test order
+    test "registers configured topics and consolidated ETS tables exist" do
       EventBus.Manager.Topic.register_from_config()
       configured_topics = Application.get_env(:event_bus, :topics, [])
 
       assert length(configured_topics) > 0, "Config should have topics"
 
+      # Consolidated tables should exist
+      assert :ets.info(EventBus.Service.Store.table_name()) != :undefined,
+             "Consolidated store ETS table should exist"
+
+      assert :ets.info(EventBus.Service.Observation.table_name()) != :undefined,
+             "Consolidated observation ETS table should exist"
+
+      # All configured topics should be registered
       for topic <- configured_topics do
-        store_table = String.to_atom("eb_es_#{topic}")
-        watcher_table = String.to_atom("eb_ew_#{topic}")
-
-        assert :ets.info(store_table) != :undefined,
-               "Store ETS table for #{topic} should exist"
-
-        assert :ets.info(watcher_table) != :undefined,
-               "Observation ETS table for #{topic} should exist"
+        assert EventBus.topic_exist?(topic),
+               "Topic #{topic} should be registered"
       end
     end
   end

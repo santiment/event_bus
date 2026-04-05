@@ -1,6 +1,7 @@
 defmodule EventBus.Service.TopicTest do
   use ExUnit.Case, async: false
-  alias EventBus.Service.Topic
+
+  alias EventBus.Service.{Observation, Store, Topic}
 
   doctest Topic
 
@@ -23,14 +24,12 @@ defmodule EventBus.Service.TopicTest do
   test "register_topic" do
     topic = :t1
     Topic.register(topic)
-    all_tables = :ets.all()
-
-    store_table_name = String.to_atom("eb_es_#{topic}")
-    watcher_table_name = String.to_atom("eb_ew_#{topic}")
 
     assert Enum.any?(Topic.all(), fn t -> t == topic end)
-    assert Enum.any?(all_tables, fn t -> t == store_table_name end)
-    assert Enum.any?(all_tables, fn t -> t == watcher_table_name end)
+
+    # Consolidated tables should exist
+    assert :ets.info(Store.table_name()) != :undefined
+    assert :ets.info(Observation.table_name()) != :undefined
   end
 
   test "register_topic does not re-register same topic" do
@@ -46,14 +45,8 @@ defmodule EventBus.Service.TopicTest do
     topic = :t3
     Topic.register(topic)
     Topic.unregister(topic)
-    all_tables = :ets.all()
-
-    store_table_name = String.to_atom("eb_es_#{topic}")
-    watcher_table_name = String.to_atom("eb_ew_#{topic}")
 
     refute Enum.any?(Topic.all(), fn t -> t == topic end)
-    refute Enum.any?(all_tables, fn t -> t == store_table_name end)
-    refute Enum.any?(all_tables, fn t -> t == watcher_table_name end)
   end
 
   test "all" do

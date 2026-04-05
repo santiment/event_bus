@@ -15,6 +15,7 @@ defmodule EventBus.Service.SubscribeOnceTest do
     EventBus.register_topic(@topic)
 
     on_exit(fn ->
+      Application.delete_env(:event_bus, :subscribe_once_test_pid)
       Process.sleep(100)
       EventBus.unregister_topic(@topic)
     end)
@@ -40,6 +41,25 @@ defmodule EventBus.Service.SubscribeOnceTest do
     def process({config, topic, id}) do
       send(:subscribe_once_test, {:processed, {__MODULE__, config}, topic, id})
       EventBus.mark_as_completed({{__MODULE__, config}, {topic, id}})
+    end
+  end
+
+  defmodule DelayedCompletionSubscriber do
+    def process({topic, id}) do
+      test_pid = Application.fetch_env!(:event_bus, :subscribe_once_test_pid)
+
+      waiter =
+        spawn(fn ->
+          send(test_pid, {:completion_waiter, id, self()})
+
+          receive do
+            :complete ->
+              EventBus.mark_as_completed({__MODULE__, {topic, id}})
+          end
+        end)
+
+      send(test_pid, {:spawned_waiter, id, waiter})
+      :ok
     end
   end
 
@@ -170,5 +190,35 @@ defmodule EventBus.Service.SubscribeOnceTest do
     # Should be unsubscribed because the crash caused a skip which decremented
     Process.sleep(100)
     assert [] == EventBus.subscribers()
+  end
+
+  test "completion from an earlier event does not consume a fresh subscription limit" do
+    # This reproduces the stale-completion race: the first subscription receives
+    # an event, then we re-subscribe before that old event reaches its terminal
+    # state. The old completion must not spend the new subscription's limit.
+    Application.put_env(:event_bus, :subscribe_once_test_pid, self())
+
+    EventBus.subscribe_once({DelayedCompletionSubscriber, ["subscribe_once_topic"]})
+
+    old_event = %Event{id: "old-event", topic: @topic, data: %{}}
+    EventBus.Service.Notification.notify(old_event)
+
+    waiter =
+      receive do
+        {:completion_waiter, "old-event", pid} ->
+          assert_receive {:spawned_waiter, "old-event", ^pid}
+          pid
+
+        {:spawned_waiter, "old-event", pid} ->
+          assert_receive {:completion_waiter, "old-event", ^pid}
+          pid
+      end
+
+    EventBus.subscribe_once({DelayedCompletionSubscriber, ["subscribe_once_topic"]})
+
+    send(waiter, :complete)
+    Process.sleep(100)
+
+    assert [{DelayedCompletionSubscriber, _patterns}] = EventBus.subscribers()
   end
 end
