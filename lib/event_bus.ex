@@ -357,10 +357,10 @@ defmodule EventBus do
   """
   @spec mark_as_completed(subscriber_with_event_ref()) :: :ok
   def mark_as_completed({subscriber, {topic, id}}),
-    do: ObservationService.mark_as_completed({subscriber, {topic, id}})
+    do: ObservationService.mark_as_completed({normalize_subscriber(subscriber), {topic, id}})
 
   def mark_as_completed({subscriber, topic, id}),
-    do: ObservationService.mark_as_completed({subscriber, {topic, id}})
+    do: ObservationService.mark_as_completed({normalize_subscriber(subscriber), {topic, id}})
 
   @doc """
   Mark the event as skipped for the subscriber.
@@ -378,10 +378,10 @@ defmodule EventBus do
   """
   @spec mark_as_skipped(subscriber_with_event_ref()) :: :ok
   def mark_as_skipped({subscriber, {topic, id}}),
-    do: ObservationService.mark_as_skipped({subscriber, {topic, id}})
+    do: ObservationService.mark_as_skipped({normalize_subscriber(subscriber), {topic, id}})
 
   def mark_as_skipped({subscriber, topic, id}),
-    do: ObservationService.mark_as_skipped({subscriber, {topic, id}})
+    do: ObservationService.mark_as_skipped({normalize_subscriber(subscriber), {topic, id}})
 
   @doc """
   Toggle debug mode on or off.
@@ -402,4 +402,7 @@ defmodule EventBus do
   defdelegate toggle_debug(enabled),
     to: Debug,
     as: :toggle
+
+  defp normalize_subscriber(subscriber) when is_atom(subscriber), do: {subscriber, nil}
+  defp normalize_subscriber({_module, _config} = subscriber), do: subscriber
 end

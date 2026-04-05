@@ -73,7 +73,7 @@ defmodule EventBus.Service.SubscribeOnceTest do
     Process.register(self(), :subscribe_once_test)
 
     EventBus.subscribe_once({OnceSubscriber, ["subscribe_once_topic"]})
-    assert [{OnceSubscriber, _}] = EventBus.subscribers()
+    assert [{{OnceSubscriber, nil}, _}] = EventBus.subscribers()
 
     notify_and_wait("once-1")
     assert_received {:processed, OnceSubscriber, @topic, "once-1"}
@@ -134,7 +134,7 @@ defmodule EventBus.Service.SubscribeOnceTest do
 
     # Should still be subscribed (limit was cleared)
     Process.sleep(100)
-    assert [{OnceSubscriber, _}] = EventBus.subscribers()
+    assert [{{OnceSubscriber, nil}, _}] = EventBus.subscribers()
 
     notify_and_wait("re-2")
     assert_received {:processed, OnceSubscriber, @topic, "re-2"}
@@ -153,7 +153,7 @@ defmodule EventBus.Service.SubscribeOnceTest do
 
     # Should still be subscribed (limit is now 3)
     Process.sleep(100)
-    assert [{CountingSubscriber, _}] = EventBus.subscribers()
+    assert [{{CountingSubscriber, nil}, _}] = EventBus.subscribers()
   end
 
   test "subscribe_once works with configured subscribers" do
@@ -219,6 +219,6 @@ defmodule EventBus.Service.SubscribeOnceTest do
     send(waiter, :complete)
     Process.sleep(100)
 
-    assert [{DelayedCompletionSubscriber, _patterns}] = EventBus.subscribers()
+    assert [{{DelayedCompletionSubscriber, nil}, _patterns}] = EventBus.subscribers()
   end
 end

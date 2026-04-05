@@ -49,7 +49,7 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topic_patterns}) do
-    GenServer.call(__MODULE__, {:subscribe, {subscriber, topic_patterns}})
+    GenServer.call(__MODULE__, {:subscribe, {normalize(subscriber), topic_patterns}})
   end
 
   @doc """
@@ -57,7 +57,7 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
   def subscribe({subscriber, topic_patterns}, opts) do
-    GenServer.call(__MODULE__, {:subscribe_with_opts, {subscriber, topic_patterns}, opts})
+    GenServer.call(__MODULE__, {:subscribe_with_opts, {normalize(subscriber), topic_patterns}, opts})
   end
 
   @doc """
@@ -65,7 +65,7 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe_once(subscriber_with_topic_patterns()) :: :ok
   def subscribe_once({subscriber, topic_patterns}) do
-    GenServer.call(__MODULE__, {:subscribe_n, {subscriber, topic_patterns}, 1})
+    GenServer.call(__MODULE__, {:subscribe_n, {normalize(subscriber), topic_patterns}, 1})
   end
 
   @doc """
@@ -73,7 +73,7 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
   def subscribe_n({subscriber, topic_patterns}, count) do
-    GenServer.call(__MODULE__, {:subscribe_n, {subscriber, topic_patterns}, count})
+    GenServer.call(__MODULE__, {:subscribe_n, {normalize(subscriber), topic_patterns}, count})
   end
 
   @doc """
@@ -81,7 +81,7 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec unsubscribe(subscriber()) :: :ok
   def unsubscribe(subscriber) do
-    GenServer.call(__MODULE__, {:unsubscribe, subscriber})
+    GenServer.call(__MODULE__, {:unsubscribe, normalize(subscriber)})
   end
 
   @doc """
@@ -270,4 +270,9 @@ defmodule EventBus.Manager.Subscription do
         state
     end
   end
+
+  # Normalize bare module subscribers to {module, nil} so all downstream
+  # code can assume a uniform {module, config} shape.
+  defp normalize(subscriber) when is_atom(subscriber), do: {subscriber, nil}
+  defp normalize({_module, _config} = subscriber), do: subscriber
 end
