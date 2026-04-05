@@ -10,17 +10,7 @@ defmodule EventBus.Manager.StoreTest do
 
   setup do
     refute is_nil(Process.whereis(Store))
-
-    Store.unregister_topic(@topic)
-    Store.register_topic(@topic)
     :ok
-  end
-
-  test "exist?" do
-    topic = :metrics_received_1
-    Store.register_topic(topic)
-
-    assert Store.exist?(topic)
   end
 
   test "register_topic" do
@@ -28,13 +18,13 @@ defmodule EventBus.Manager.StoreTest do
   end
 
   test "unregister_topic" do
-    Store.register_topic(@topic)
     assert :ok == Store.unregister_topic(@topic)
   end
 
   test "create" do
     event = %Event{id: "E1", transaction_id: "T1", data: %{}, topic: @topic}
     assert :ok == Store.create(event)
+    Store.delete({@topic, "E1"})
   end
 
   test "delete" do

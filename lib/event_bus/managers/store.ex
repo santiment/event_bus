@@ -2,9 +2,8 @@ defmodule EventBus.Manager.Store do
   @moduledoc false
 
   ###########################################################################
-  # Event store is a storage handler for events. It allows to create and delete
-  # stores for a topic. And allows fetching, deleting and saving events for the
-  # topic.
+  # Event store is a storage handler for events. It allows creating, deleting,
+  # and fetching events. Uses a single consolidated ETS table.
   ###########################################################################
 
   use GenServer
@@ -29,17 +28,8 @@ defmodule EventBus.Manager.Store do
   end
 
   @doc """
-  Check if the topic exists?
-  It's important to keep this in blocking manner to prevent double creations in
-  sub modules
-  """
-  @spec exist?(topic()) :: boolean()
-  def exist?(topic) do
-    GenServer.call(__MODULE__, {:exist?, topic})
-  end
-
-  @doc """
-  Register a topic to the store
+  Register a topic to the store.
+  With consolidated tables this is a no-op, kept for API compatibility.
   """
   @spec register_topic(topic()) :: :ok
   def register_topic(topic) do
@@ -47,7 +37,8 @@ defmodule EventBus.Manager.Store do
   end
 
   @doc """
-  Unregister the topic from the store
+  Unregister the topic from the store.
+  Deletes all events for the topic from the consolidated table.
   """
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
@@ -95,35 +86,24 @@ defmodule EventBus.Manager.Store do
   ###########################################################################
 
   @doc false
-  @spec handle_call({:register_topic, topic()}, any(), term()) ::
-          {:reply, :ok, term()}
   def handle_call({:register_topic, topic}, _from, state) do
     @backend.register_topic(topic)
     {:reply, :ok, state}
   end
 
-  @spec handle_call({:unregister_topic, topic()}, any(), term()) ::
-          {:reply, :ok, term()}
+  @doc false
   def handle_call({:unregister_topic, topic}, _from, state) do
     @backend.unregister_topic(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:exist?, topic()}, any(), term()) ::
-          {:reply, boolean(), term()}
-  def handle_call({:exist?, topic}, _from, state) do
-    {:reply, @backend.exist?(topic), state}
-  end
-
-  @doc false
-  @spec handle_call({:create, event()}, any(), term()) :: {:reply, :ok, term()}
   def handle_call({:create, event}, _from, state) do
     @backend.create(event)
     {:reply, :ok, state}
   end
 
-  @spec handle_cast({:delete, event_shadow()}, term()) :: {:noreply, term()}
+  @doc false
   def handle_cast({:delete, {topic, id}}, state) do
     @backend.delete({topic, id})
     {:noreply, state}

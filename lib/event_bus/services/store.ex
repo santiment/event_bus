@@ -9,33 +9,38 @@ defmodule EventBus.Service.Store do
   @typep event_shadow :: EventBus.event_shadow()
   @typep topic :: EventBus.topic()
 
-  @ets_opts [:set, :public, :named_table, {:read_concurrency, true}]
-  @prefix "eb_es_"
+  @table :eb_event_store
+  @table_opts [:set, :public, :named_table, {:read_concurrency, true}]
 
   @doc false
-  @spec exist?(topic()) :: boolean()
-  def exist?(topic) do
-    :ets.info(table_name(topic)) != :undefined
-  end
+  @spec setup_table() :: :ok
+  def setup_table do
+    if :ets.info(@table) == :undefined do
+      :ets.new(@table, @table_opts)
+    end
 
-  @doc false
-  @spec register_topic(topic()) :: :ok
-  def register_topic(topic) do
-    if !exist?(topic), do: :ets.new(table_name(topic), @ets_opts)
     :ok
   end
 
   @doc false
+  @spec table_name() :: atom()
+  def table_name, do: @table
+
+  @doc false
+  @spec register_topic(topic()) :: :ok
+  def register_topic(_topic), do: :ok
+
+  @doc false
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
-    if exist?(topic), do: :ets.delete(table_name(topic))
+    :ets.match_delete(@table, {{topic, :_}, :_})
     :ok
   end
 
   @doc false
   @spec fetch(event_shadow()) :: event() | nil
   def fetch({topic, id}) do
-    case :ets.lookup(table_name(topic), id) do
+    case :ets.lookup(@table, {topic, id}) do
       [{_, %Event{} = event}] ->
         event
 
@@ -58,18 +63,14 @@ defmodule EventBus.Service.Store do
   @doc false
   @spec delete(event_shadow()) :: :ok
   def delete({topic, id}) do
-    if exist?(topic), do: :ets.delete(table_name(topic), id)
+    :ets.delete(@table, {topic, id})
     :ok
   end
 
   @doc false
   @spec create(event()) :: :ok
   def create(%Event{id: id, topic: topic} = event) do
-    :ets.insert(table_name(topic), {id, event})
+    :ets.insert(@table, {{topic, id}, event})
     :ok
-  end
-
-  defp table_name(topic) do
-    String.to_atom("#{@prefix}#{topic}")
   end
 end

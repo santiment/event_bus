@@ -2,10 +2,9 @@ defmodule EventBus.Manager.Observation do
   @moduledoc false
 
   ###########################################################################
-  # Event Observation module is a helper to get info for the events and also an
-  # organizer for the events happened in time. It automatically deletes
-  # processed events from the ETS table. Event subscribers are responsible for
-  # notifying the Event Observation on completions and skips.
+  # Event Observation module tracks event lifecycle. It automatically deletes
+  # processed events when all subscribers reach a terminal state. Uses a
+  # single consolidated ETS table.
   ###########################################################################
 
   use GenServer
@@ -32,17 +31,8 @@ defmodule EventBus.Manager.Observation do
   end
 
   @doc """
-  Check if the topic exists?
-  It's important to keep this in blocking manner to prevent double creations in
-  sub modules
-  """
-  @spec exist?(topic()) :: boolean()
-  def exist?(topic) do
-    GenServer.call(__MODULE__, {:exist?, topic})
-  end
-
-  @doc """
-  Register a topic to the watcher
+  Register a topic to the watcher.
+  With consolidated tables this is a no-op, kept for API compatibility.
   """
   @spec register_topic(topic()) :: :ok
   def register_topic(topic) do
@@ -50,7 +40,8 @@ defmodule EventBus.Manager.Observation do
   end
 
   @doc """
-  Unregister a topic from the watcher
+  Unregister a topic from the watcher.
+  Deletes all watcher entries for the topic from the consolidated table.
   """
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
@@ -82,7 +73,7 @@ defmodule EventBus.Manager.Observation do
   end
 
   @doc """
-  Create an watcher
+  Create a watcher
   """
   @spec create(subscribers_with_event_shadow()) :: :ok
   def create({subscribers, {topic, id}}) do
@@ -106,46 +97,30 @@ defmodule EventBus.Manager.Observation do
   ###########################################################################
 
   @doc false
-  @spec handle_call({:register_topic, topic()}, any(), term()) ::
-          {:reply, :ok, term()}
   def handle_call({:register_topic, topic}, _from, state) do
     @backend.register_topic(topic)
     {:reply, :ok, state}
   end
 
-  @spec handle_call({:unregister_topic, topic()}, any(), term()) ::
-          {:reply, :ok, term()}
+  @doc false
   def handle_call({:unregister_topic, topic}, _from, state) do
     @backend.unregister_topic(topic)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_call({:exist?, topic()}, any(), term()) ::
-          {:reply, boolean(), term()}
-  def handle_call({:exist?, topic}, _from, state) do
-    {:reply, @backend.exist?(topic), state}
-  end
-
-  @doc false
-  @spec handle_call({:save, event_shadow(), watcher()}, any(), term()) ::
-          {:reply, :ok, term()}
   def handle_call({:save, {topic, id}, watcher}, _from, state) do
     @backend.save({topic, id}, watcher)
     {:reply, :ok, state}
   end
 
   @doc false
-  @spec handle_cast({:mark_as_completed, subscriber_with_event_ref()}, term()) ::
-          {:noreply, term()}
   def handle_cast({:mark_as_completed, {subscriber, {topic, id}}}, state) do
     @backend.mark_as_completed({subscriber, {topic, id}})
     {:noreply, state}
   end
 
   @doc false
-  @spec handle_cast({:mark_as_skipped, subscriber_with_event_ref()}, term()) ::
-          {:noreply, term()}
   def handle_cast({:mark_as_skipped, {subscriber, {topic, id}}}, state) do
     @backend.mark_as_skipped({subscriber, {topic, id}})
     {:noreply, state}

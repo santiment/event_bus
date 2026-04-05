@@ -12,10 +12,14 @@ defmodule EventBus.Application do
   }
 
   alias EventBus.Service.Debug
+  alias EventBus.Service.Observation, as: ObservationService
+  alias EventBus.Service.Store, as: StoreService
   alias EventBus.Service.Subscription, as: SubscriptionService
 
   def start(_type, _args) do
     Debug.setup_table()
+    StoreService.setup_table()
+    ObservationService.setup_table()
     SubscriptionService.setup_tables()
 
     children = [

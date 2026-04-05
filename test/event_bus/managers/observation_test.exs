@@ -15,22 +15,12 @@ defmodule EventBus.Manager.ObservationTest do
     :ok
   end
 
-  test "exist?" do
-    topic = :metrics_received_1
-    Observation.register_topic(topic)
-
-    assert Observation.exist?(topic)
-  end
-
   test "register_topic" do
     assert :ok == Observation.register_topic(:metrics_destroyed)
   end
 
   test "unregister_topic" do
-    topic = :metrics_destroyed
-    Observation.register_topic(topic)
-
-    assert :ok == Observation.unregister_topic(topic)
+    assert :ok == Observation.unregister_topic(:metrics_destroyed)
   end
 
   test "create" do
@@ -43,8 +33,6 @@ defmodule EventBus.Manager.ObservationTest do
       {MemoryLeakerOne, %{}},
       {BadOne, %{}}
     ]
-
-    Observation.register_topic(topic)
 
     assert :ok == Observation.create({subscribers, {topic, id}})
   end
@@ -60,7 +48,6 @@ defmodule EventBus.Manager.ObservationTest do
       {BadOne, %{}}
     ]
 
-    Observation.register_topic(topic)
     Observation.create({subscribers, {topic, id}})
 
     subscriber = {InputLogger, %{}}
@@ -85,7 +72,6 @@ defmodule EventBus.Manager.ObservationTest do
       {BadOne, %{}}
     ]
 
-    Observation.register_topic(topic)
     Observation.create({subscribers, {topic, id}})
 
     subscriber = {InputLogger, %{}}

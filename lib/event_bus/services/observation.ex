@@ -13,32 +13,37 @@ defmodule EventBus.Service.Observation do
   @typep topic :: EventBus.topic()
   @typep watcher :: {subscribers(), subscribers(), subscribers()}
 
-  @ets_opts [
+  @table :eb_event_watchers
+  @table_opts [
     :set,
     :public,
     :named_table,
     {:write_concurrency, true},
     {:read_concurrency, true}
   ]
-  @prefix "eb_ew_"
 
   @doc false
-  @spec exist?(topic()) :: boolean()
-  def exist?(topic) do
-    :ets.info(table_name(topic)) != :undefined
-  end
+  @spec setup_table() :: :ok
+  def setup_table do
+    if :ets.info(@table) == :undefined do
+      :ets.new(@table, @table_opts)
+    end
 
-  @doc false
-  @spec register_topic(topic()) :: :ok
-  def register_topic(topic) do
-    if !exist?(topic), do: :ets.new(table_name(topic), @ets_opts)
     :ok
   end
 
   @doc false
+  @spec table_name() :: atom()
+  def table_name, do: @table
+
+  @doc false
+  @spec register_topic(topic()) :: :ok
+  def register_topic(_topic), do: :ok
+
+  @doc false
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
-    if exist?(topic), do: :ets.delete(table_name(topic))
+    :ets.match_delete(@table, {{topic, :_}, :_})
     :ok
   end
 
@@ -90,7 +95,7 @@ defmodule EventBus.Service.Observation do
   @spec fetch(event_shadow()) ::
           {subscribers(), subscribers(), subscribers()} | nil
   def fetch({topic, id}) do
-    case :ets.lookup(table_name(topic), id) do
+    case :ets.lookup(@table, {topic, id}) do
       [{_, data}] ->
         data
 
@@ -119,7 +124,7 @@ defmodule EventBus.Service.Observation do
     if complete?(watcher) do
       delete_with_relations({topic, id})
     else
-      :ets.insert(table_name(topic), {id, watcher})
+      :ets.insert(@table, {{topic, id}, watcher})
     end
 
     :ok
@@ -130,13 +135,8 @@ defmodule EventBus.Service.Observation do
     Debug.log("cleaned topic=#{inspect(topic)} id=#{inspect(id)}")
     Debug.clean_dispatch_metadata(topic, id)
     StoreManager.delete({topic, id})
-    :ets.delete(table_name(topic), id)
+    :ets.delete(@table, {topic, id})
 
     :ok
-  end
-
-  @spec table_name(topic()) :: atom()
-  defp table_name(topic) do
-    String.to_atom("#{@prefix}#{topic}")
   end
 end
