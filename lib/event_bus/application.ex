@@ -4,7 +4,6 @@ defmodule EventBus.Application do
   use Application
 
   alias EventBus.Manager.{
-    Notification,
     Observation,
     Store,
     Subscription,
@@ -23,9 +22,9 @@ defmodule EventBus.Application do
     SubscriptionService.setup_tables()
 
     children = [
+      {Task.Supervisor, name: EventBus.TaskSupervisor},
       Topic,
       Subscription,
-      Notification,
       Store,
       Observation
     ]

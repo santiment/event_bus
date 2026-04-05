@@ -5,7 +5,6 @@ defmodule EventBus do
   """
 
   alias EventBus.Manager.{
-    Notification,
     Observation,
     Store,
     Subscription,
@@ -14,6 +13,7 @@ defmodule EventBus do
 
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
+  alias EventBus.Service.Notification, as: NotificationService
 
   @typedoc "EventBus.Model.Event struct"
   @type event :: Event.t()
@@ -66,7 +66,10 @@ defmodule EventBus do
   @type topic_patterns :: list(topic_pattern())
 
   @doc """
-  Send an event to all subscribers.
+  Send an event to all subscribers asynchronously.
+
+  The event is dispatched in a separate task, allowing concurrent processing
+  of multiple events. Returns immediately.
 
   ## Examples
 
@@ -77,9 +80,31 @@ defmodule EventBus do
 
   """
   @spec notify(event()) :: :ok
-  defdelegate notify(event),
-    to: Notification,
-    as: :notify
+  def notify(%Event{} = event) do
+    Task.Supervisor.start_child(EventBus.TaskSupervisor, fn ->
+      NotificationService.notify(event)
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Send an event to all subscribers synchronously in the calling process.
+
+  Blocks until all subscribers have been dispatched.
+
+  ## Examples
+
+      event = %Event{id: 1, topic: :webhook_received,
+        data: %{"message" => "Hi all!"}}
+      EventBus.notify_sync(event)
+      :ok
+
+  """
+  @spec notify_sync(event()) :: :ok
+  def notify_sync(%Event{} = event) do
+    NotificationService.notify(event)
+  end
 
   @doc """
   Check if a topic registered.

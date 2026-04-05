@@ -1,12 +1,9 @@
-defmodule EventBus.Manager.NotificationTest do
+defmodule EventBus.NotifyTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
-  alias EventBus.Manager.Notification
   alias EventBus.Model.Event
-
-  doctest Notification
 
   @topic :metrics_received
   @event %Event{
@@ -14,17 +11,23 @@ defmodule EventBus.Manager.NotificationTest do
     transaction_id: "T1",
     topic: @topic,
     data: [1, 2],
-    source: "NotifierTest"
+    source: "NotifyTest"
   }
 
   setup do
-    refute is_nil(Process.whereis(Notification))
+    refute is_nil(Process.whereis(EventBus.TaskSupervisor))
     :ok
   end
 
-  test "notify" do
+  test "notify dispatches asynchronously via TaskSupervisor" do
     capture_log(fn ->
-      assert :ok == Notification.notify(@event)
+      assert :ok == EventBus.notify(@event)
+    end)
+  end
+
+  test "notify_sync dispatches in the calling process" do
+    capture_log(fn ->
+      assert :ok == EventBus.notify_sync(@event)
     end)
   end
 end
