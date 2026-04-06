@@ -1,191 +1,158 @@
 # EventBus
 
-[![Build Status](https://travis-ci.org/otobus/event_bus.svg?branch=master)](https://travis-ci.org/otobus/event_bus)
 [![Module Version](https://img.shields.io/hexpm/v/event_bus.svg)](https://hex.pm/packages/event_bus)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/event_bus/)
 [![Total Download](https://img.shields.io/hexpm/dt/event_bus.svg)](https://hex.pm/packages/event_bus)
-[![License](https://img.shields.io/hexpm/l/event_bus.svg)](https://github.com/otobus/event_bus/blob/master/LICENSE)
-[![Last Updated](https://img.shields.io/github/last-commit/otobus/event_bus.svg)](https://github.com/otobus/event_bus/commits/master)
+[![License](https://img.shields.io/hexpm/l/event_bus.svg)](./LICENSE.md)
 
-Traceable, extendable and minimalist event bus implementation for Elixir with built-in event store and event watcher based on ETS.
+Traceable, extendable, and minimalist event bus implementation for Elixir, with an ETS-backed event store and built-in subscriber lifecycle tracking.
 
-![Event Bus](https://cdn-images-1.medium.com/max/1600/1*0fcfAiHvNeHCRYhp-a32YA.png)
+This repository is a maintained and modernized fork of [otobus/event_bus](https://github.com/otobus/event_bus), which is no longer actively maintained. It features an improved architecture, concurrent dispatch, subscriber priorities and guards, cancellation, and limited subscriptions.
 
-## Table of Contents
+![Event Bus](assets/architecture.svg)
 
-[Features](#features)
+## Contents
 
-[Getting Started](#getting-started)
+- [Highlights](#highlights)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Usage](#usage)
+- [Debug mode](#debug-mode)
+- [Storage model](#storage-model)
+- [Documentation and ecosystem](#documentation-and-ecosystem)
+- [License](#license)
 
-[Installation](#installation)
+## Highlights
 
-[Usage](#usage)
-
-- [Register event topics in `config.exs`](#register-event-topics-in-configexs)
-
-- [Register/unregister event topics on demand](#registerunregister-event-topics-on-demand)
-
-- [Subscribe to the 'event bus' with a subscriber and list of given topics](#subscribe-to-the-event-bus-with-a-subscriber-and-list-of-given-topics-notification-manager-will-match-with-regex)
-
-- [Subscribe with options (priority, guards)](#subscribe-with-options)
-
-- [Subscribe once or N times](#subscribe-once-or-n-times)
-
-- [Unsubscribe from the 'event bus'](#unsubscribe-from-the-event-bus)
-
-- [List subscribers](#list-subscribers)
-
-- [List subscribers of a specific event](#list-subscribers-of-a-specific-event)
-
-- [Event data structure](#event-data-structure)
-
-- [Define an event struct](#event-data-structure)
-
-- [Notify all subscribers with `EventBus.Model.Event` data](#notify-all-subscribers-with-eventbusmodelevent-data)
-
-- [Fetch an event from the store](#fetch-an-event-from-the-store)
-
-- [Mark as completed on Event Observation Manager](#mark-as-completed-on-event-observation-manager)
-
-- [Mark as skipped on Event Observation Manager](#mark-as-skipped-on-event-observation-manager)
-
-- [Cancel event propagation](#cancel-event-propagation)
-
-- [Check if a topic exists?](#check-if-a-topic-exists)
-
-- [Use block builder to build `EventBus.Model.Event` struct](#use-block-builder-to-build-eventbusmodelevent-struct)
-
-- [Use block notifier to notify event data to given topic](#use-block-notifier-to-notify-event-data-to-given-topic)
-
-[Sample Subscriber Implementation](#sample-subscriber-implementation)
-
-[Debug Mode](#debug-mode)
-
-[Event Storage Details](#event-storage-details)
-
-[Traceability](#traceability)
-
-[EventBus.Metrics and UI](#eventbusmetrics-library)
-
-[Documentation](#documentation)
-
-[Addons](#addons)
-
-[Wiki](https://github.com/otobus/event_bus/wiki)
-
-[Contributing](./CONTRIBUTING.md)
-
-[License](./LICENSE.md)
-
-[Code of Conduct](./CODE_OF_CONDUCT.md)
-
-[Questions](./QUESTIONS.md)
-
-## Features
-
-- Fast data writes with enabled concurrent writes to ETS.
-
-- Fast data reads with enabled concurrent reads from ETS.
-
-- Fast by design. Almost all implementation data accesses have O(1) complexity.
-
-- Memory friendly. Instead of pushing event data, pushes event shadow(event id and topic) to only interested subscribers.
-
-- Applies [queueing theory](https://www.vividcortex.com/resources/queueing-theory) to handle inputs.
-
-- Extendable with addons.
-
-- Traceable with optional attributes. Optional attributes compatible with opentracing platform.
-
-- Minimal with required attributes(In case, you want it work minimal use 3 required attributes to deliver your events).
-
-## Getting Started
-
-Start using `event_bus` library in five basic steps:
-
-- [1: Installing Library Package](https://github.com/otobus/event_bus/wiki/Installing-Library-Package)
-- [2: Creating/Registering Topics](https://github.com/otobus/event_bus/wiki/Creating-(Registering)-Topics)
-- [3: Emitting/Dispatching an Event](https://github.com/otobus/event_bus/wiki/Emitting-(Dispatching)-an-Event)
-- [4: Creating Simple Event Consumers/Listeners/Subscribers](https://github.com/otobus/event_bus/wiki/Creating-Event-Consumers)
-- [5: Subscribing Consumer/Listener/Subscriber for a Topic](https://github.com/otobus/event_bus/wiki/Subscribing-Consumers-to-Topic(s))
+- Asynchronous dispatch via `EventBus.notify/1`, backed by `Task.Supervisor`
+- Synchronous dispatch via `EventBus.notify_sync/1` when you want to stay in the calling process
+- Minimal contention under concurrent load
+- Priority-based dispatch, guard filters, and event cancellation
+- Limited subscriptions (`subscribe_once/2`, `subscribe_n/3`) with safe concurrent delivery
+- Event shadow delivery (`{topic, id}`) instead of copying full event payloads to every subscriber
+- In-memory event store with automatic cleanup after all subscribers complete
+- Optional traceability fields such as `transaction_id`, `initialized_at`, `occurred_at`, and `ttl`
 
 ## Installation
 
-The package can be installed by adding `:event_bus` to your list of dependencies in `mix.exs`:
+Install this fork from GitHub:
 
 ```elixir
 def deps do
   [
-    {:event_bus, "~> 1.7.0"}
+    {:event_bus, github: "santiment/event_bus"}
   ]
 end
 ```
 
-Be sure to include `event_bus` in your `mix.exs` Mixfile:
+The application starts automatically as an OTP dependency.
+
+## Quick start
+
+Register a topic, define a subscriber, subscribe it, and publish an event:
 
 ```elixir
-def application do
-  [
-    applications: [
-      # ...
-      :event_bus
-    ]
-  ]
+config :event_bus,
+  topics: [:order_created]
+```
+
+```elixir
+defmodule OrderSubscriber do
+  use EventBus.Subscriber
+
+  @impl true
+  def process({topic, id}) do
+    event = EventBus.fetch_event({topic, id})
+
+    IO.inspect(event.data, label: "received #{topic}")
+
+    EventBus.mark_as_completed({__MODULE__, {topic, id}})
+  end
 end
 ```
+
+```elixir
+EventBus.subscribe({OrderSubscriber, ["order_created"]})
+
+event = %EventBus.Model.Event{
+  id: "evt-1",
+  topic: :order_created,
+  data: %{order_id: 42, amount: 1500}
+}
+
+EventBus.notify(event)
+```
+
+For more patterns — GenServer-based processing, configured subscribers, or persistence — see the [`examples/`](examples/) directory.
 
 ## Usage
 
-##### Register event topics in `config.exs`
+### Register topics
+
+Configure topics up front:
 
 ```elixir
-config :event_bus, topics: [:message_received, :another_event_occurred]
+config :event_bus,
+  topics: [:message_received, :another_event_occurred]
 ```
 
-##### Register/unregister event topics on demand
+Or register and unregister them at runtime:
+
 ```elixir
-# register
 EventBus.register_topic(:webhook_received)
 > :ok
 
-# unregister topic
-# Warning: It also deletes the related topic tables!
 EventBus.unregister_topic(:webhook_received)
 > :ok
 ```
 
-##### Subscribe to the 'event bus' with a subscriber and list of given topics, `Notification Manager` will match with Regex
+Unregistering a topic also removes its related runtime state from the internal ETS tables.
+
+### Subscribe to topics
+
+Subscribe a module to all topics:
 
 ```elixir
-# to catch every event topic
 EventBus.subscribe({MyEventSubscriber, [".*"]})
-> :ok
-
-# to catch specific topics
-EventBus.subscribe({MyEventSubscriber, ["purchase_", "booking_confirmed$", "flight_passed$"]})
-> :ok
-
-# if your subscriber has a config
-config = %{}
-subscriber = {MyEventSubscriber, config}
-EventBus.subscribe({subscriber, [".*"]})
 > :ok
 ```
 
-##### Subscribe with options
+Subscribe to a subset of topics by regex:
 
-You can pass `:priority` and `:guard` options when subscribing.
+```elixir
+EventBus.subscribe(
+  {MyEventSubscriber, ["purchase_", "booking_confirmed$", "flight_passed$"]}
+)
+> :ok
+```
 
-**Priority** controls dispatch order. Higher priority subscribers run first. Default is `0`.
+Subscribe a configured subscriber:
+
+```elixir
+config = %{region: "eu"}
+subscriber = {MyConfiguredSubscriber, config}
+
+EventBus.subscribe({subscriber, ["order_.*"]})
+> :ok
+```
+
+Configured subscribers receive `{config, topic, id}` in `process/1`.
+Plain subscribers receive `{topic, id}`.
+
+When you inspect subscribers via `EventBus.subscribers/0` or `EventBus.subscribers/1`, plain subscribers are returned as `{Module, nil}`.
+
+### Subscribe with options
+
+You can set `:priority` and `:guard` per subscriber.
+
+Higher priority runs first:
 
 ```elixir
 EventBus.subscribe({AuthValidator, ["order_.*"]}, priority: 100)
 EventBus.subscribe({OrderProcessor, ["order_.*"]}, priority: 0)
 EventBus.subscribe({AuditLogger, ["order_.*"]}, priority: -10)
-# Dispatch order: AuthValidator -> OrderProcessor -> AuditLogger
 ```
 
-**Guards** filter events by content. The guard function receives the full `%Event{}` struct and must return a truthy value for the subscriber to be dispatched.
+Guard functions receive the full `%EventBus.Model.Event{}` and decide whether the event should be delivered to the subscriber:
 
 ```elixir
 EventBus.subscribe(
@@ -195,456 +162,322 @@ EventBus.subscribe(
 )
 ```
 
-If a guard returns falsy, the subscriber is marked as skipped. If a guard raises, the error is logged and the subscriber is skipped without affecting other subscribers.
+Guard behavior:
 
-Calling `EventBus.subscribe/1` (without options) clears any previously set options for that subscriber.
+- A truthy result dispatches the subscriber.
+- A falsy result marks the subscriber as skipped.
+- A raised exception is logged and also marks the subscriber as skipped.
 
-##### Subscribe once or N times
+Re-subscribing with `EventBus.subscribe/1` clears previously configured guard and priority options for that subscriber.
 
-Subscribers can auto-unsubscribe after a given number of terminal events (`mark_as_completed` or `mark_as_skipped`).
+### Subscribe once or N times
+
+Subscribers can automatically unsubscribe after processing a fixed number of events:
 
 ```elixir
-# Unsubscribe after processing one event
 EventBus.subscribe_once({MySubscriber, ["order_created"]})
 
-# Unsubscribe after processing 5 events
 EventBus.subscribe_n({MySubscriber, ["order_created"]}, 5)
 ```
 
-The count is decremented when the subscriber reaches a terminal state, not when `process/1` returns. This means async subscribers that call `mark_as_completed` later are counted correctly. Crashes also consume a count since EventBus marks the subscriber as skipped.
+Important details:
 
-##### Unsubscribe from the 'event bus'
+- The counter is decremented when the subscriber reaches a terminal state via `mark_as_completed/1` or `mark_as_skipped/1`.
+- Crashes consume a count because EventBus marks the subscriber as skipped.
+- In-flight tracking prevents concurrent `notify/1` calls from overdelivering limited subscriptions.
+- Re-subscribing creates a new subscription generation, so old async completions do not consume the limit of a fresh subscription.
+
+### Unsubscribe
+
 ```elixir
 EventBus.unsubscribe(MyEventSubscriber)
 > :ok
 
-# if your subscriber has a config
-config = %{}
-EventBus.unsubscribe({MyEventSubscriber, config})
+config = %{region: "eu"}
+EventBus.unsubscribe({MyConfiguredSubscriber, config})
 > :ok
 ```
 
-##### List subscribers
+### List subscribers
+
 ```elixir
 EventBus.subscribers()
-> [{MyEventSubscriber, [".*"]}, {{AnotherSubscriber, %{}}, [".*"]}]
+> [{{MyEventSubscriber, nil}, [".*"]}, {{AnotherSubscriber, %{}}, [".*"]}]
 ```
 
-##### List subscribers of a specific event
 ```elixir
 EventBus.subscribers(:hello_received)
-> [MyEventSubscriber, {{AnotherSubscriber, %{}}}]
+> [{MyEventSubscriber, nil}, {AnotherSubscriber, %{}}]
 ```
 
-##### Event data structure
+### Event structure
 
-Data structure for `EventBus.Model.Event`
+`EventBus.Model.Event` is the core payload shape:
 
 ```elixir
 %EventBus.Model.Event{
-  id: String.t | integer(), # required
-  transaction_id: String.t | integer(), # optional
-  topic: atom(), # required
-  data: any() # required,
-  initialized_at: integer(), # optional, might be seconds, milliseconds or microseconds even nanoseconds since Elixir does not have a limit on integer size
-  occurred_at: integer(), # optional, might be seconds, milliseconds or microseconds even nanoseconds since Elixir does not have a limit on integer size
-  source: String.t, # optional, source of the event, who created it
-  ttl: integer() # optional, might be seconds, milliseconds or microseconds even nanoseconds since Elixir does not have a limit on integer size. If `ttl` field is set, it is recommended to set `occurred_at` field too.
+  id: String.t() | integer(),
+  transaction_id: String.t() | integer(),
+  topic: atom(),
+  data: any(),
+  initialized_at: integer(),
+  occurred_at: integer(),
+  source: String.t(),
+  ttl: integer()
 }
 ```
 
-**`transaction_id` attribute**
+At minimum, provide:
 
-Firstly, `transaction_id` attribute is an optional field, if you need to store any meta identifier related to event transaction, it is the place to store. Secondly, `transaction_id` is one of the good ways to track events related to the same transaction on a chain of events. If you have time, have a look to the [story](https://hackernoon.com/trace-monitor-chain-of-microservice-logs-in-the-same-transaction-f13420f2d42c).
+- `id`
+- `topic`
+- `data`
 
-**`initialized_at` attribute**
+Optional fields:
 
-Optional, but good to have field for all events to track when the event generator started to process for generating this event.
+- `transaction_id` helps correlate related events across a workflow.
+- `initialized_at` captures when event creation started.
+- `occurred_at` captures when the underlying business event happened.
+- `ttl` can be used by your own consumers for expiration or retention logic.
 
-**`occurred_at` attribute**
+For end-to-end tracing, populate `transaction_id` for related events and use `initialized_at` / `occurred_at` consistently. `EventSource.build/2` and `EventSource.notify/2` can fill these automatically.
 
-Optional, but good to have field for all events to track when the event occurred with unix timestamp value. The library does not automatically set this value since the value depends on the timing choice.
-
-**`ttl` attribute**
-
-Optional, but might to have field for all events to invalidate an event after a certain amount of time. Currently, the `event_bus` library does not do any specific thing using this field. If you need to discard an event in a certain amount of time, that field would be very useful.
-
-Note: If you set this field, then `occurred_at` field is required.
-
-##### Define an event struct
+Example:
 
 ```elixir
 alias EventBus.Model.Event
-event = %Event{id: "123", transaction_id: "1",
-  topic: :hello_received, data: %{message: "Hello"}}
-another_event = %Event{id: "124", transaction_id: "1",
-  topic: :bye_received, data: [user_id: 1, goal: "exit"]}
-```
-**Important Note:** It is important to have unique identifier for each event struct per topic. I recommend to use a unique id generator like `{:uuid, "~> 1.1"}`.
 
-##### Notify all subscribers with `EventBus.Model.Event` data
+event = %Event{
+  id: "123",
+  transaction_id: "tx-1",
+  topic: :hello_received,
+  data: %{message: "Hello"}
+}
+```
+
+### Notify subscribers
+
+Dispatch asynchronously in a supervised task:
+
 ```elixir
 EventBus.notify(event)
 > :ok
-EventBus.notify(another_event)
+```
+
+Dispatch synchronously in the current process:
+
+```elixir
+EventBus.notify_sync(event)
 > :ok
 ```
 
-##### Fetch an event from the store
+`notify_sync/1` runs subscriber dispatch in the caller. If a subscriber hands work off to another process and marks completion later, that later completion is still asynchronous.
+
+### Fetch an event from the store
+
 ```elixir
 topic = :bye_received
 id = "124"
-EventBus.fetch_event({topic, id})
-> %EventBus.Model.Event{data: [user_id: 1, goal: "exit"], id: "124", topic: :bye_received, transaction_id: "1"}
 
-# To fetch only the event data
+EventBus.fetch_event({topic, id})
+> %EventBus.Model.Event{...}
+
 EventBus.fetch_event_data({topic, id})
 > [user_id: 1, goal: "exit"]
 ```
 
-##### Mark as completed on Event Observation Manager
+### Mark events as completed or skipped
+
+Subscribers are responsible for reaching a terminal state.
+
+Mark as completed:
+
 ```elixir
-subscriber = MyEventSubscriber
-# If your subscriber has config then pass tuple
-subscriber = {MyEventSubscriber, config}
+EventBus.mark_as_completed({MyEventSubscriber, {:bye_received, id}})
+> :ok
+```
+
+For configured subscribers:
+
+```elixir
+subscriber = {MyConfiguredSubscriber, config}
 EventBus.mark_as_completed({subscriber, {:bye_received, id}})
 > :ok
 ```
 
-##### Mark as skipped on Event Observation Manager
+Mark as skipped:
+
 ```elixir
-subscriber = MyEventSubscriber
-# If your subscriber has config then pass tuple
-subscriber = {MyEventSubscriber, config}
-EventBus.mark_as_skipped({subscriber, {:bye_received, id}})
+EventBus.mark_as_skipped({MyEventSubscriber, {:bye_received, id}})
 > :ok
 ```
 
-##### Cancel event propagation
+### Cancel event propagation
 
-A subscriber can stop an event from being dispatched to remaining lower-priority subscribers during the synchronous `process/1` call. There are two ways to cancel:
+A subscriber can stop propagation to remaining lower-priority subscribers during `process/1`.
+
+Return `{:cancel, reason}`:
 
 ```elixir
-# Return {:cancel, reason}
 def process({topic, id}) do
   event = EventBus.fetch_event({topic, id})
-  unless authorized?(event.data) do
+
+  if authorized?(event.data) do
+    EventBus.mark_as_completed({__MODULE__, {topic, id}})
+  else
     {:cancel, "unauthorized"}
   end
 end
+```
 
-# Or raise EventBus.CancelEvent
-def process({topic, id}) do
+Or raise `EventBus.CancelEvent`:
+
+```elixir
+def process({_topic, _id}) do
   raise EventBus.CancelEvent, reason: "validation failed"
 end
 ```
 
-When cancellation happens:
+Cancellation behavior:
+
 - Remaining lower-priority subscribers are marked as skipped.
-- A return-value cancellation (`{:cancel, reason}`) marks the cancelling subscriber as completed.
-- A raised `CancelEvent` marks the cancelling subscriber as skipped.
-- Regular exceptions (non-`CancelEvent`) do **not** cancel propagation.
+- Returning `{:cancel, reason}` marks the cancelling subscriber as completed.
+- Raising `EventBus.CancelEvent` marks the cancelling subscriber as skipped.
+- Regular exceptions do not cancel propagation.
 
-##### Check if a topic exists?
-```elixir
-EventBus.topic_exist?(:metrics_updated)
-> false
-```
+### Build and emit events with `EventBus.EventSource`
 
-##### Use block builder to build `EventBus.Model.Event` struct
+`EventBus.EventSource` helps create event structs with sensible defaults.
 
-Builder automatically sets `initialized_at` and `occurred_at` attributes
 ```elixir
 use EventBus.EventSource
 
-id = "some unique id"
-topic = :user_created
-transaction_id = "tx" # optional
-ttl = 600_000 # optional
-source = "my event creator" # optional
+params = %{topic: :user_created}
 
-params = %{id: id, topic: topic, transaction_id: transaction_id, ttl: ttl, source: source}
 EventSource.build(params) do
-  # do some calc in here
-  Process.sleep(1)
-  # as a result return only the event data
   %{email: "jd@example.com", name: "John Doe"}
 end
-> %EventBus.Model.Event{data: %{email: "jd@example.com", name: "John Doe"},
- id: "some unique id", initialized_at: 1515274599140491,
- occurred_at: 1515274599141211, source: "my event creator", topic: :user_created, transaction_id: "tx", ttl: 600000}
 ```
 
-It is recommended to set optional params in event_bus application config, this will allow you to auto generate majority of optional values without writing code. Here is a sample config for event_bus:
+With config like this:
 
 ```elixir
 config :event_bus,
-  topics: [], # list of atoms
-  ttl: 30_000_000, # integer
-  time_unit: :microsecond, # atom
-  id_generator: EventBus.Util.Base62 # module: must implement 'unique_id/0' function
+  topics: [],
+  ttl: 30_000_000,
+  time_unit: :microsecond,
+  id_generator: EventBus.Util.Base62
 ```
 
-After having such config like above, you can generate events without providing optional attributes like below:
+`EventSource.build/2` can auto-fill values such as:
 
-```elixir
-# Without optional params
-params = %{topic: topic}
-EventSource.build(params) do
-  %{email: "jd@example.com", name: "John Doe"}
-end
-> %EventBus.Model.Event{data: %{email: "jd@example.com", name: "John Doe"},
- id: "Ewk7fL6Erv0vsW6S", initialized_at: 1515274599140491,
- occurred_at: 1515274599141211, source: "AutoModuleName", topic: :user_created,
- transaction_id: nil, ttl: 30_000_000}
+- `id`
+- `transaction_id` (defaults to `id`)
+- `source`
+- `ttl`
+- `initialized_at`
+- `occurred_at`
 
-# With optional error topic param
-params = %{id: id, topic: topic, error_topic: :user_create_erred}
-EventSource.build(params) do
-  {:error, %{email: "Invalid format"}}
-end
-> %EventBus.Model.Event{data: {:error, %{email: "Invalid format"}},
- id: "some unique id", initialized_at: 1515274599140491,
- occurred_at: 1515274599141211, source: nil, topic: :user_create_erred,
- transaction_id: nil, ttl: 30_000_000}
-```
+`EventSource.notify/2` builds and dispatches in one step:
 
-##### Use block notifier to notify event data to given topic
-
-Builder automatically sets `initialized_at` and `occurred_at` attributes
 ```elixir
 use EventBus.EventSource
 
-id = "some unique id"
-topic = :user_created
-error_topic = :user_create_erred # optional (in case error tuple return in yield execution, it will use :error_topic value as :topic for event creation)
-transaction_id = "tx" # optional
-ttl = 600_000 # optional
-source = "my event creator" # optional
-EventBus.register_topic(topic) # in case you didn't register it in `config.exs`
+params = %{topic: :user_created, error_topic: :user_create_erred}
 
-params = %{id: id, topic: topic, transaction_id: transaction_id, ttl: ttl, source: source, error_topic: error_topic}
 EventSource.notify(params) do
-  # do some calc in here
-  # as a result return only the event data
   %{email: "mrsjd@example.com", name: "Mrs Jane Doe"}
 end
-> # it automatically calls notify method with event data and return only event data as response
-> %{email: "mrsjd@example.com", name: "Mrs Jane Doe"}
 ```
 
-### Sample Subscriber Implementation
+If the block returns `{:error, reason}`, the event is emitted under `:error_topic` when provided.
+
+### Subscriber examples
+
+See [`examples/`](examples/) for ready-to-use patterns:
+
+- [`examples/simple_subscriber.ex`](examples/simple_subscriber.ex) - minimal synchronous subscriber
+- [`examples/genserver_subscriber.ex`](examples/genserver_subscriber.ex) - asynchronous processing via GenServer
+- [`examples/configured_subscriber.ex`](examples/configured_subscriber.ex) - configured subscribers with `{Module, config}`
+- [`examples/persistent_store_subscriber.ex`](examples/persistent_store_subscriber.ex) - persisting all events to a data store
+
+## Debug mode
+
+Enable debug logging:
 
 ```elixir
-defmodule MyEventSubscriber do
-  ...
-
-  # if your subscriber does not have a config
-  def process({topic, id} = event_shadow) do
-    GenServer.cast(__MODULE__, event_shadow)
-    :ok
-  end
-
-  ...
-
-  # if your subscriber has a config
-  def process({config, topic, id} = event_shadow_with_conf) do
-    GenServer.cast(__MODULE__, event_shadow_with_conf)
-    :ok
-  end
-
-  ...
-
-
-  # if your subscriber does not have a config
-  def handle_cast({:bye_received, id} = event_shadow, state) do
-    event = EventBus.fetch_event(event_shadow)
-    # do sth with event
-
-    # update the watcher!
-    # version >= 1.4.0
-    EventBus.mark_as_completed({__MODULE__, event_shadow})
-    # all versions
-    EventBus.mark_as_completed({__MODULE__, :bye_received, id})
-    ...
-    {:noreply, state}
-  end
-
-  def handle_cast({:hello_received, id} = event_shadow, state) do
-    event = EventBus.fetch_event({:hello_received, id})
-    # do sth with EventBus.Model.Event
-
-    # update the watcher!
-    # version >= 1.4.0
-    EventBus.mark_as_completed({__MODULE__, event_shadow})
-    # all versions
-    EventBus.mark_as_completed({__MODULE__, :hello_received, id})
-    ...
-    {:noreply, state}
-  end
-
-  def handle_cast({topic, id} = event_shadow, state) do
-    # version >= 1.4.0
-    EventBus.mark_as_skipped({__MODULE__, event_shadow})
-
-    # all versions
-    EventBus.mark_as_skipped({__MODULE__, topic, id})
-    {:noreply, state}
-  end
-
-  ...
-
-  # if your subscriber has a config
-  def handle_cast({config, :bye_received, id}, state) do
-    event = EventBus.fetch_event({:bye_received, id})
-    # do sth with event
-
-    # update the watcher!
-    subscriber = {__MODULE__, config}
-    EventBus.mark_as_completed({subscriber, :bye_received, id})
-    ...
-    {:noreply, state}
-  end
-
-  def handle_cast({config, :hello_received, id}, state) do
-    event = EventBus.fetch_event({:hello_received, id})
-    # do sth with EventBus.Model.Event
-
-    # update the watcher!
-    subscriber = {__MODULE__, config}
-    EventBus.mark_as_completed({subscriber, :hello_received, id})
-    ...
-    {:noreply, state}
-  end
-
-  def handle_cast({config, topic, id}, state) do
-    subscriber = {__MODULE__, config}
-    EventBus.mark_as_skipped({subscriber, topic, id})
-    {:noreply, state}
-  end
-
-  ...
-end
-```
-
-## Debug Mode
-
-EventBus includes an opt-in debug mode that logs the full lifecycle of every event using `Logger.debug`.
-
-```elixir
-# Enable via config
 config :event_bus, debug: true
+```
 
-# Or toggle at runtime
+Or toggle it at runtime:
+
+```elixir
 EventBus.toggle_debug(true)
 EventBus.toggle_debug(false)
 ```
 
-When enabled, the following events are logged:
+When enabled, EventBus logs lifecycle events such as:
 
-- `[EventBus] notify topic=:order_created id=abc123`
-- `[EventBus] dispatch topic=:order_created id=abc123 subscriber=OrderHandler`
-- `[EventBus] completed topic=:order_created id=abc123 subscriber=OrderHandler duration=1.2ms`
-- `[EventBus] skipped topic=:order_created id=abc123 subscriber=OrderHandler duration=1.2ms`
-- `[EventBus] cleaned topic=:order_created id=abc123`
-- `[EventBus] subscribe subscriber=OrderHandler patterns=["order_.*"]`
-- `[EventBus] unsubscribe subscriber=OrderHandler`
-- `[EventBus] register_topic topic=:order_created`
+- `notify`
+- `dispatch`
+- `completed`
+- `skipped`
+- `cleaned`
+- `subscribe`
+- `unsubscribe`
+- `register_topic`
 
-Duration is measured from dispatch until the subscriber reaches a terminal state (`mark_as_completed` or `mark_as_skipped`), so it reflects real processing time even for async subscribers.
+Subscriber durations are measured from dispatch until the subscriber reaches a terminal state, so they reflect real processing time even for async subscribers.
 
-Debug mode uses `Logger.put_module_level/2` to ensure debug logs are emitted regardless of the global Logger level.
+## Storage model
 
-## Event Storage Details
+EventBus uses ETS tables shared across all topics:
 
-When an event configured in `config` file, 2 ETS tables will be created for the event on app start.
+| Table | Purpose |
+| --- | --- |
+| `:eb_event_store` | Stores event structs keyed by `{topic, id}` |
+| `:eb_event_watchers` | Tracks subscriber lists and remaining count per event |
+| `:eb_event_watcher_status` | Tracks per-subscriber terminal state |
+| `:eb_event_subscription_generations` | Stores the subscription generation snapshot per event |
+| `:eb_topics` | Stores registered topic names |
+| `:eb_subscribers` | Stores subscriber-to-pattern mappings |
+| `:eb_topic_subscribers` | Stores the precomputed topic-to-subscriber index |
+| `:eb_subscription_opts` | Stores priority, guard, and generation per subscriber |
 
-All event data is temporarily saved to the ETS tables with the name `:eb_es_<<topic>>` until all subscribers processed the data. This table is a read heavy table. When a subscriber needs to process the event data, it queries this table to fetch event data.
+When every subscriber for an event reaches a terminal state, the event store entry and observation state are cleaned up automatically.
 
-To watch event status, a separate watcher table is created for each event type with the name `:eb_ew_<<topic>>`. This table is used for keeping the status of the event. `Observation Manager` updates this table frequently with the notification of the event subscribers.
-
-When all subscribers process the event data, data in the event store and watcher, automatically deleted by the `Observation Manager`. If you need to see the status of unprocessed events, event watcher table is one of the good places to query.
-
-For example; to get the list unprocessed events for `:hello_received` event:
-
-```elixir
-# The following command will return a list of tuples with the `id`, and `event_subscribers_list` where `subscribers` is the list of event subscribers, `completers` is the subscribers those processed the event and notified `Observation Manager`, and lastly `skippers` is the subscribers those skipped the event without processing.
-
-# Assume you have an event with the name ':hello_received'
-:ets.tab2list(:eb_ew_hello_received)
-> [{id, {subscribers, completers, skippers}}, ...]
-```
-
-ETS storage SHOULD NOT be considered as a persistent storage. If you need to store events to a persistent data store, then subscribe to all event types by a module with `[".*"]` event topic then save every event data.
-
-For example;
+To inspect in-flight events manually:
 
 ```elixir
-EventBus.subscribe({MyDataStore, [".*"]})
+:ets.tab2list(:eb_event_watchers)
+> [{{topic, id}, subscribers, pending_count}, ...]
 
-# then in your data store save the event
-defmodule MyDataStore do
-  ...
-
-  def process({topic, id} = event_shadow) do
-    GenServer.cast(__MODULE__, event_shadow)
-    :ok
-  end
-
-  ...
-
-  def handle_cast({topic, id}, state) do
-    event = EventBus.fetch_event({topic, id})
-    # write your logic to save event_data to a persistent store
-
-    EventBus.mark_as_completed({__MODULE__, {topic, id}})
-    {:noreply, state}
-  end
-end
+:ets.lookup(:eb_event_watcher_status, {topic, id, subscriber})
+> [{{topic, id, subscriber}, :pending}]
 ```
 
-## Traceability
+ETS is not durable storage. If you need persistence, subscribe a consumer to `[".*"]` and write the fetched events to your database or message archive.
 
-EventBus comes with a good enough data structure to track the event life cycle with its optional parameters. For a traceable system, it is highly recommend to fill optional fields on event data. It is also encouraged to use `EventSource.notify` block/yield to automatically set the `initialized_at` and `occurred_at` values.
+## Documentation and ecosystem
 
-### System Events
+### Further reading
 
-This feature removed with the version 1.3 to keep the core library simple. If you need to trace system events please check the sample wrapper implementation from the [wiki page](https://github.com/otobus/event_bus/wiki/Tracing-System-Events).
+- [Original wiki](https://github.com/otobus/event_bus/wiki) (some pages may be outdated relative to this fork)
+- [Contributing](./CONTRIBUTING.md)
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
 
-### EventBus.Metrics Library
+### Addons
 
-EventBus has some addons to extend its optional functionalities. One of them is `event_bus_metrics` library which comes with a UI, RESTful endpoints and SSE streams to provide instant metrics for event_bus topics.
+Sample ecosystem projects:
 
-[EventBus.Metrics Instructions](https://github.com/otobus/event_bus/wiki/EventBus-Metrics-and-UI)
+| Addon | Description | Link | Docs |
+| --- | --- | --- | --- |
+| `event_bus_postgres` | Persists `event_bus` events to Postgres using GenStage | [GitHub](https://github.com/otobus/event_bus_postgres) | [HexDocs](https://hexdocs.pm/event_bus_postgres) |
+| `event_bus_logger` | Simple log subscriber implementation | [GitHub](https://github.com/otobus/event_bus_logger) | [HexDocs](https://hexdocs.pm/event_bus_logger) |
+| `event_bus_metrics` | Metrics UI and metrics API endpoints for EventBus | [Hex](https://hex.pm/packages/event_bus_metrics) | [HexDocs](https://hexdocs.pm/event_bus_metrics) |
 
-## Documentation
+These addons were built for the original `otobus/event_bus` and may need updates to work with this fork.
 
-- [Wiki](https://github.com/otobus/event_bus/wiki)
+## License
 
-- [Module docs](https://hexdocs.pm/event_bus)
-
-- [The story](https://medium.com/@mustafaturan/event-bus-implementation-s-d2854a9fafd5)
-
-## Addons
-
-A few sample addons listed below. Please do not hesitate to add your own addon to the list.
-
-| Addon Name           | Description   | Link          | Docs          |
-| -------------------- | ------------- | ------------- | ------------- |
-| `event_bus_postgres` | Fast event consumer to persist `event_bus` events to Postgres using GenStage          | [Github](https://github.com/otobus/event_bus_postgres) | [HexDocs](https://hexdocs.pm/event_bus_postgres) |
-| `event_bus_logger`   | Deadly simple log subscriber implementation                                             | [Github](https://github.com/otobus/event_bus_logger)   | [HexDocs](https://hexdocs.pm/event_bus_logger)   |
-| `event_bus_metrics`  | Metrics UI and metrics API endpoints for EventBus events for debugging and monitoring | [Hex](https://hex.pm/packages/event_bus_metrics)       | [HexDocs](https://hexdocs.pm/event_bus_metrics)  |
-
-Note: The addons under [https://github.com/otobus](https://github.com/otobus) organization implemented as a sample, but feel free to use them in your project with respecting their licenses.
-
-## Copyright and License
-
-MIT
-
-Copyright (c) 2022 Mustafa Turan
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+EventBus is released under the [MIT License](./LICENSE.md).

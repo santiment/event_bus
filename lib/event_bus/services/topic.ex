@@ -1,35 +1,47 @@
 defmodule EventBus.Service.Topic do
   @moduledoc false
 
-  alias EventBus.Manager.Observation, as: ObservationManager
-  alias EventBus.Manager.Store, as: StoreManager
   alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Service.Debug
+  alias EventBus.Service.Observation, as: ObservationService
+  alias EventBus.Service.Store, as: StoreService
 
   @typep topic :: EventBus.topic()
   @typep topics :: EventBus.topics()
 
-  @app :event_bus
-  @namespace :topics
-  @modules [StoreManager, SubscriptionManager, ObservationManager]
+  @table :eb_topics
+  @table_opts [:set, :public, :named_table, {:read_concurrency, true}]
+  @modules [StoreService, SubscriptionManager, ObservationService]
+
+  @doc false
+  @spec setup_table() :: :ok
+  def setup_table do
+    if :ets.info(@table) == :undefined do
+      :ets.new(@table, @table_opts)
+    end
+
+    :ok
+  end
 
   @doc false
   @spec all() :: topics()
   def all do
-    Application.get_env(:event_bus, :topics, [])
+    :ets.tab2list(@table) |> Enum.map(fn {topic} -> topic end)
   end
 
   @doc false
   @spec exist?(topic()) :: boolean()
   def exist?(topic) do
-    Enum.member?(all(), topic)
+    :ets.member(@table, topic)
   end
 
   @doc false
   @spec register_from_config() :: :ok
   def register_from_config do
-    Enum.each(all(), fn topic ->
-      Enum.each(@modules, fn mod -> mod.register_topic(topic) end)
+    topics = Application.get_env(:event_bus, :topics, [])
+
+    Enum.each(topics, fn topic ->
+      register(topic)
     end)
 
     :ok
@@ -38,9 +50,9 @@ defmodule EventBus.Service.Topic do
   @doc false
   @spec register(topic()) :: :ok
   def register(topic) do
-    if !exist?(topic) do
+    # insert_new is atomic: returns true if inserted, false if already exists.
+    if :ets.insert_new(@table, {topic}) do
       Debug.log("register_topic topic=#{inspect(topic)}")
-      Application.put_env(@app, @namespace, [topic | all()], persistent: true)
       Enum.each(@modules, fn mod -> mod.register_topic(topic) end)
     end
 
@@ -53,8 +65,7 @@ defmodule EventBus.Service.Topic do
     if exist?(topic) do
       Debug.log("unregister_topic topic=#{inspect(topic)}")
       Enum.each(@modules, fn mod -> mod.unregister_topic(topic) end)
-      topics = List.delete(all(), topic)
-      Application.put_env(@app, @namespace, topics, persistent: true)
+      :ets.delete(@table, topic)
     end
 
     :ok

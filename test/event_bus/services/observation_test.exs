@@ -46,6 +46,33 @@ defmodule EventBus.Service.ObservationTest do
     end)
   end
 
+  test "unregister_topic clears watcher status and generation snapshot entries" do
+    topic = :obs_unregister_status_test
+    id = "E1"
+    subscriber = {InputLogger, %{}}
+
+    Observation.save({topic, id}, {[subscriber], [], []})
+    Observation.save_snapshot({topic, id}, %{subscriber => 3})
+
+    assert [{{topic, id, subscriber}, :pending}] ==
+             :ets.lookup(:eb_event_watcher_status, {topic, id, subscriber})
+
+    assert [{{topic, id}, snapshot}] =
+             :ets.lookup(:eb_event_subscription_generations, {topic, id})
+
+    assert snapshot[subscriber] == 3
+
+    Observation.unregister_topic(topic)
+
+    assert [] == :ets.lookup(:eb_event_watcher_status, {topic, id, subscriber})
+    assert [] == :ets.lookup(:eb_event_subscription_generations, {topic, id})
+
+    capture_log(fn ->
+      Observation.mark_as_completed({subscriber, {topic, id}})
+      assert nil == Observation.fetch({topic, id})
+    end)
+  end
+
   test "create and fetch" do
     topic = :some_event_occurred1
     id = "E1"

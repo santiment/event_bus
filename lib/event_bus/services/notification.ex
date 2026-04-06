@@ -4,7 +4,6 @@ defmodule EventBus.Service.Notification do
   require Logger
 
   alias EventBus.CancelEvent
-  alias EventBus.Manager.Observation, as: ObservationManager
   alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
@@ -24,31 +23,35 @@ defmodule EventBus.Service.Notification do
     if subscribers == [] do
       warn_missing_topic_subscription(topic)
     else
-      Debug.log("notify topic=#{inspect(topic)} id=#{inspect(id)}")
+      {admitted_subscribers, snapshot} = SubscriptionManager.prepare_subscribers_for_dispatch(subscribers)
 
-      :ok = StoreService.create(event)
-      :ok = ObservationService.save({topic, id}, {subscribers, [], []})
-      # Persist the subscription versions that were active for this event so
-      # later async completions/skips cannot mutate a newer re-subscription.
-      :ok = ObservationService.save_snapshot({topic, id}, SubscriptionManager.snapshot_generations(subscribers))
+      if admitted_subscribers == [] do
+        Debug.log("notify_dropped topic=#{inspect(topic)} id=#{inspect(id)} reason=no_admitted_subscribers")
+      else
+        Debug.log("notify topic=#{inspect(topic)} id=#{inspect(id)}")
 
-      start_time = System.monotonic_time()
+        :ok = StoreService.create(event)
+        :ok = ObservationService.save({topic, id}, {admitted_subscribers, [], []})
+        :ok = ObservationService.save_snapshot({topic, id}, snapshot)
 
-      Telemetry.execute(
-        [:event_bus, :notify, :start],
-        %{system_time: System.system_time()},
-        %{topic: topic, event_id: id}
-      )
+        start_time = System.monotonic_time()
 
-      notify_subscribers(subscribers, event, start_time)
+        Telemetry.execute(
+          [:event_bus, :notify, :start],
+          %{system_time: System.system_time()},
+          %{topic: topic, event_id: id}
+        )
 
-      duration = System.monotonic_time() - start_time
+        notify_subscribers(admitted_subscribers, event, start_time)
 
-      Telemetry.execute(
-        [:event_bus, :notify, :stop],
-        %{duration: duration},
-        %{topic: topic, event_id: id, subscriber_count: length(subscribers)}
-      )
+        duration = System.monotonic_time() - start_time
+
+        Telemetry.execute(
+          [:event_bus, :notify, :stop],
+          %{duration: duration},
+          %{topic: topic, event_id: id, subscriber_count: length(admitted_subscribers)}
+        )
+      end
     end
 
     :ok
@@ -74,37 +77,25 @@ defmodule EventBus.Service.Notification do
   end
 
   defp skip_remaining(subscribers, {topic, id}) do
-    Enum.each(subscribers, fn subscriber ->
-      sub_key = subscriber_key(subscriber)
+    Enum.each(subscribers, fn sub_key ->
       Debug.log("skipped_by_cancel topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}")
-      ObservationManager.mark_as_skipped({sub_key, {topic, id}})
+      ObservationService.mark_as_skipped({sub_key, {topic, id}})
     end)
   end
 
   defp sort_by_priority(subscribers) do
-    Enum.sort_by(subscribers, fn sub -> -fetch_priority(sub) end, &<=/2)
+    Enum.sort_by(subscribers, fn sub -> -SubscriptionManager.fetch_opts(sub).priority end, &<=/2)
   end
 
-  defp fetch_priority({_subscriber, _config} = sub) do
-    SubscriptionManager.fetch_opts(sub).priority
-  end
-
-  defp fetch_priority(subscriber) do
-    SubscriptionManager.fetch_opts(subscriber).priority
-  end
-
-  defp dispatch_subscriber(subscriber, event, {topic, id}, start_time) do
-    sub_key = subscriber_key(subscriber)
-    # Guard/priority data is read through the manager so it stays private and
-    # validated instead of being exposed in public ETS.
+  defp dispatch_subscriber(sub_key, event, {topic, id}, start_time) do
     opts = SubscriptionManager.fetch_opts(sub_key)
 
     case evaluate_guard(opts.guard, event, sub_key, topic, id) do
       :pass ->
-        do_dispatch(subscriber, {topic, id}, start_time)
+        do_dispatch(sub_key, {topic, id}, start_time)
 
       :skip ->
-        ObservationManager.mark_as_skipped({sub_key, {topic, id}})
+        ObservationService.mark_as_skipped({sub_key, {topic, id}})
         :ok
     end
   end
@@ -125,13 +116,18 @@ defmodule EventBus.Service.Notification do
       :skip
   end
 
+  # All subscribers are now normalized to {module, config} tuples.
+  # Config-less subscribers have config=nil; we call process({topic, id}) for those
+  # and process({config, topic, id}) for configured subscribers.
   defp do_dispatch({subscriber, config} = sub_key, {topic, id}, start_time) do
     Debug.log("dispatch topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}")
     Debug.record_dispatch(sub_key, topic, id)
 
-    case subscriber.process({config, topic, id}) do
+    call_args = if is_nil(config), do: {topic, id}, else: {config, topic, id}
+
+    case subscriber.process(call_args) do
       {:cancel, reason} ->
-        ObservationManager.mark_as_completed({sub_key, {topic, id}})
+        ObservationService.mark_as_completed({sub_key, {topic, id}})
         Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}")
         :cancelled
 
@@ -142,8 +138,8 @@ defmodule EventBus.Service.Notification do
     error ->
       case error do
         %CancelEvent{reason: reason} ->
-          Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect({subscriber, config})} reason=#{inspect(reason)}")
-          ObservationManager.mark_as_skipped({{subscriber, config}, {topic, id}})
+          Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}")
+          ObservationService.mark_as_skipped({sub_key, {topic, id}})
           :cancelled
 
         _ ->
@@ -151,44 +147,10 @@ defmodule EventBus.Service.Notification do
           duration = System.monotonic_time() - start_time
           log_error(subscriber, error, stacktrace)
           emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace)
-          ObservationManager.mark_as_skipped({{subscriber, config}, {topic, id}})
+          ObservationService.mark_as_skipped({sub_key, {topic, id}})
           :ok
       end
   end
-
-  defp do_dispatch(subscriber, {topic, id}, start_time) do
-    Debug.log("dispatch topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(subscriber)}")
-    Debug.record_dispatch(subscriber, topic, id)
-
-    case subscriber.process({topic, id}) do
-      {:cancel, reason} ->
-        ObservationManager.mark_as_completed({subscriber, {topic, id}})
-        Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(subscriber)} reason=#{inspect(reason)}")
-        :cancelled
-
-      _ ->
-        :ok
-    end
-  rescue
-    error ->
-      case error do
-        %CancelEvent{reason: reason} ->
-          Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(subscriber)} reason=#{inspect(reason)}")
-          ObservationManager.mark_as_skipped({subscriber, {topic, id}})
-          :cancelled
-
-        _ ->
-          stacktrace = __STACKTRACE__
-          duration = System.monotonic_time() - start_time
-          log_error(subscriber, error, stacktrace)
-          emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace)
-          ObservationManager.mark_as_skipped({subscriber, {topic, id}})
-          :ok
-      end
-  end
-
-  defp subscriber_key({subscriber, config}), do: {subscriber, config}
-  defp subscriber_key(subscriber), do: subscriber
 
   defp emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace) do
     Telemetry.execute(

@@ -6,6 +6,7 @@ defmodule EventBus.Service.Subscription do
 
   @subscribers_table :eb_subscribers
   @topic_map_table :eb_topic_subscribers
+  @opts_table :eb_subscription_opts
 
   @typep subscriber :: EventBus.subscriber()
   @typep subscribers :: EventBus.subscribers()
@@ -22,14 +23,14 @@ defmodule EventBus.Service.Subscription do
   ]
 
   @spec subscribed?(subscriber_with_topic_patterns()) :: boolean()
-  def subscribed?(subscriber) do
-    Enum.member?(subscribers(), subscriber)
+  def subscribed?({subscriber, topic_patterns}) do
+    Enum.member?(subscribers(), {normalize(subscriber), topic_patterns})
   end
 
   @doc false
   @spec setup_tables() :: :ok
   def setup_tables do
-    for table <- [@subscribers_table, @topic_map_table] do
+    for table <- [@subscribers_table, @topic_map_table, @opts_table] do
       if :ets.info(table) == :undefined do
         :ets.new(table, @ets_opts)
       end
@@ -41,6 +42,7 @@ defmodule EventBus.Service.Subscription do
   @doc false
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topics}) do
+    subscriber = normalize(subscriber)
     Debug.log("subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}")
     :ets.insert(@subscribers_table, {subscriber, topics})
     rebuild_topic_map_for_subscriber(subscriber, topics)
@@ -51,6 +53,7 @@ defmodule EventBus.Service.Subscription do
   @doc false
   @spec unsubscribe(subscriber()) :: :ok
   def unsubscribe(subscriber) do
+    subscriber = normalize(subscriber)
     Debug.log("unsubscribe subscriber=#{inspect(subscriber)}")
     :ets.delete(@subscribers_table, subscriber)
     remove_subscriber_from_all_topics(subscriber)
@@ -118,4 +121,7 @@ defmodule EventBus.Service.Subscription do
       if RegexUtil.superset?(patterns, topic), do: [subscriber | acc], else: acc
     end)
   end
+
+  defp normalize(subscriber) when is_atom(subscriber), do: {subscriber, nil}
+  defp normalize({_module, _config} = subscriber), do: subscriber
 end

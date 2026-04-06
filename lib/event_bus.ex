@@ -4,16 +4,14 @@ defmodule EventBus do
   built-in event store and event observation manager based on ETS.
   """
 
-  alias EventBus.Manager.{
-    Notification,
-    Observation,
-    Store,
-    Subscription,
-    Topic
-  }
+  alias EventBus.Manager.Subscription
 
   alias EventBus.Model.Event
   alias EventBus.Service.Debug
+  alias EventBus.Service.Notification, as: NotificationService
+  alias EventBus.Service.Observation, as: ObservationService
+  alias EventBus.Service.Store, as: StoreService
+  alias EventBus.Service.Topic, as: TopicService
 
   @typedoc "EventBus.Model.Event struct"
   @type event :: Event.t()
@@ -66,7 +64,10 @@ defmodule EventBus do
   @type topic_patterns :: list(topic_pattern())
 
   @doc """
-  Send an event to all subscribers.
+  Send an event to all subscribers asynchronously.
+
+  The event is dispatched in a separate task, allowing concurrent processing
+  of multiple events. Returns immediately.
 
   ## Examples
 
@@ -77,9 +78,31 @@ defmodule EventBus do
 
   """
   @spec notify(event()) :: :ok
-  defdelegate notify(event),
-    to: Notification,
-    as: :notify
+  def notify(%Event{} = event) do
+    Task.Supervisor.start_child(EventBus.TaskSupervisor, fn ->
+      NotificationService.notify(event)
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Send an event to all subscribers synchronously in the calling process.
+
+  Blocks until all subscribers have been dispatched.
+
+  ## Examples
+
+      event = %Event{id: 1, topic: :webhook_received,
+        data: %{"message" => "Hi all!"}}
+      EventBus.notify_sync(event)
+      :ok
+
+  """
+  @spec notify_sync(event()) :: :ok
+  def notify_sync(%Event{} = event) do
+    NotificationService.notify(event)
+  end
 
   @doc """
   Check if a topic registered.
@@ -92,7 +115,7 @@ defmodule EventBus do
   """
   @spec topic_exist?(topic()) :: boolean()
   defdelegate topic_exist?(topic),
-    to: Topic,
+    to: TopicService,
     as: :exist?
 
   @doc """
@@ -106,7 +129,7 @@ defmodule EventBus do
   """
   @spec topics() :: topics()
   defdelegate topics,
-    to: Topic,
+    to: TopicService,
     as: :all
 
   @doc """
@@ -120,7 +143,7 @@ defmodule EventBus do
   """
   @spec register_topic(topic()) :: :ok
   defdelegate register_topic(topic),
-    to: Topic,
+    to: TopicService,
     as: :register
 
   @doc """
@@ -134,7 +157,7 @@ defmodule EventBus do
   """
   @spec unregister_topic(topic()) :: :ok
   defdelegate unregister_topic(topic),
-    to: Topic,
+    to: TopicService,
     as: :unregister
 
   @doc """
@@ -296,7 +319,7 @@ defmodule EventBus do
   """
   @spec fetch_event(event_shadow()) :: event() | nil
   defdelegate fetch_event(event_shadow),
-    to: Store,
+    to: StoreService,
     as: :fetch
 
   @doc """
@@ -309,7 +332,7 @@ defmodule EventBus do
   """
   @spec fetch_event_data(event_shadow()) :: any()
   defdelegate fetch_event_data(event_shadow),
-    to: Store,
+    to: StoreService,
     as: :fetch_data
 
   @doc """
@@ -333,9 +356,11 @@ defmodule EventBus do
 
   """
   @spec mark_as_completed(subscriber_with_event_ref()) :: :ok
-  defdelegate mark_as_completed(subscriber_with_event_ref),
-    to: Observation,
-    as: :mark_as_completed
+  def mark_as_completed({subscriber, {topic, id}}),
+    do: ObservationService.mark_as_completed({normalize_subscriber(subscriber), {topic, id}})
+
+  def mark_as_completed({subscriber, topic, id}),
+    do: ObservationService.mark_as_completed({normalize_subscriber(subscriber), {topic, id}})
 
   @doc """
   Mark the event as skipped for the subscriber.
@@ -352,9 +377,11 @@ defmodule EventBus do
 
   """
   @spec mark_as_skipped(subscriber_with_event_ref()) :: :ok
-  defdelegate mark_as_skipped(subscriber_with_event_ref),
-    to: Observation,
-    as: :mark_as_skipped
+  def mark_as_skipped({subscriber, {topic, id}}),
+    do: ObservationService.mark_as_skipped({normalize_subscriber(subscriber), {topic, id}})
+
+  def mark_as_skipped({subscriber, topic, id}),
+    do: ObservationService.mark_as_skipped({normalize_subscriber(subscriber), {topic, id}})
 
   @doc """
   Toggle debug mode on or off.
@@ -375,4 +402,7 @@ defmodule EventBus do
   defdelegate toggle_debug(enabled),
     to: Debug,
     as: :toggle
+
+  defp normalize_subscriber(subscriber) when is_atom(subscriber), do: {subscriber, nil}
+  defp normalize_subscriber({_module, _config} = subscriber), do: subscriber
 end

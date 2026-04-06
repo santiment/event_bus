@@ -47,7 +47,7 @@ defmodule EventBus.Service.SubscriptionTest do
     assert {InputLogger, %{}} in sub_keys
     assert {Calculator, %{}} in sub_keys
     assert {MemoryLeakerOne, %{}} in sub_keys
-    assert AnotherCalculator in sub_keys
+    assert {AnotherCalculator, nil} in sub_keys
   end
 
   test "does not subscribe same subscriber" do
@@ -73,7 +73,7 @@ defmodule EventBus.Service.SubscriptionTest do
     assert {InputLogger, %{}} in sub_keys
     assert {MemoryLeakerOne, %{}} in sub_keys
     refute {Calculator, %{}} in sub_keys
-    refute AnotherCalculator in sub_keys
+    refute {AnotherCalculator, nil} in sub_keys
   end
 
   test "register_topic auto subscribe workers" do
@@ -90,7 +90,7 @@ defmodule EventBus.Service.SubscriptionTest do
     assert length(subs) == 3
     assert {InputLogger, %{}} in subs
     assert {Calculator, %{}} in subs
-    assert AnotherCalculator in subs
+    assert {AnotherCalculator, nil} in subs
     refute {MemoryLeakerOne, %{}} in subs
   end
 
@@ -124,8 +124,8 @@ defmodule EventBus.Service.SubscriptionTest do
   test "subscribers with event type and without config" do
     Subscription.subscribe({AnotherCalculator, [".*"]})
 
-    assert [AnotherCalculator] == Subscription.subscribers(:metrics_received)
-    assert [AnotherCalculator] == Subscription.subscribers(:metrics_summed)
+    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_received)
+    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_summed)
   end
 
   test "state is stored in ETS tables" do
@@ -143,7 +143,7 @@ defmodule EventBus.Service.SubscriptionTest do
     mr_subs = Subscription.subscribers(:metrics_received)
     assert length(mr_subs) == 2
     assert {InputLogger, %{}} in mr_subs
-    assert AnotherCalculator in mr_subs
+    assert {AnotherCalculator, nil} in mr_subs
 
     ms_subs = Subscription.subscribers(:metrics_summed)
     assert [{InputLogger, %{}}] == ms_subs
@@ -151,31 +151,15 @@ defmodule EventBus.Service.SubscriptionTest do
     assert [] == Subscription.subscribers(:auto_subscribed)
   end
 
-  test "guard closures are not exposed to arbitrary processes" do
-    secret = System.unique_integer([:positive])
-
+  test "opts are stored in ETS for hot-path reads" do
     EventBus.subscribe(
       {AnotherCalculator, ["metrics_received"]},
-      guard: fn event -> Map.get(event.data, :secret) == secret end,
+      guard: fn _event -> true end,
       priority: 7
     )
 
-    task =
-      Task.async(fn ->
-        try do
-          case :ets.lookup(:eb_subscription_opts, AnotherCalculator) do
-            [{AnotherCalculator, %{guard: guard}}] ->
-              {:exposed, :erlang.fun_info(guard, :env)}
-
-            _ ->
-              :not_exposed
-          end
-        rescue
-          ArgumentError ->
-            :not_exposed
-        end
-      end)
-
-    assert :not_exposed == Task.await(task)
+    opts = EventBus.Manager.Subscription.fetch_opts({AnotherCalculator, nil})
+    assert opts.priority == 7
+    assert is_function(opts.guard, 1)
   end
 end

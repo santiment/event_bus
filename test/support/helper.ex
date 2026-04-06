@@ -63,7 +63,7 @@ defmodule EventBus.Support.Helper do
       sum = Enum.reduce(inputs, 0, &(&1 + &2))
       # create a new event if necessary
       new_event = %Event{
-        id: "E123",
+        id: "E456",
         transaction_id: event.transaction_id,
         topic: :metrics_summed,
         data: {sum, inputs},
