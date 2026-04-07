@@ -26,13 +26,20 @@ defmodule EventBus.Service.NotificationTest do
     source: "NotificationTest"
   }
 
+  @config_topics Application.compile_env(:event_bus, :topics, [])
+
   setup do
-    for topic <- EventBus.topics() do
+    for topic <- EventBus.topics() -- @config_topics do
       EventBus.unregister_topic(topic)
     end
 
     for {subscriber, _} <- EventBus.subscribers() do
       EventBus.unsubscribe(subscriber)
+    end
+
+    # Re-register config topics in case a prior test removed them
+    for topic <- @config_topics do
+      EventBus.register_topic(topic)
     end
 
     :ok

@@ -380,7 +380,7 @@ defmodule EventBus.Service.SweeperTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Sweeper.sweep/2 with mode: :detailed
+  # Sweeper.sweep/2 with strategy: :detailed
   # ---------------------------------------------------------------------------
 
   describe "sweep (detailed)" do
@@ -389,7 +389,7 @@ defmodule EventBus.Service.SweeperTest do
       create_event("ds1", @topic, 500)
       setup_observation(@topic, "ds1", [sub])
 
-      assert 1 == Sweeper.sweep(ttl_native(100), mode: :detailed)
+      assert 1 == Sweeper.sweep(ttl_native(100), strategy: :detailed)
 
       capture_log(fn ->
         assert nil == Store.fetch({@topic, "ds1"})
@@ -413,7 +413,7 @@ defmodule EventBus.Service.SweeperTest do
       create_event("dt1", @topic, 2_000)
       setup_observation(@topic, "dt1", [sub])
 
-      Sweeper.sweep(ttl_native(500), mode: :detailed)
+      Sweeper.sweep(ttl_native(500), strategy: :detailed)
 
       assert_receive {:expired, measurements, metadata}
       assert is_integer(measurements.age)
@@ -442,7 +442,7 @@ defmodule EventBus.Service.SweeperTest do
       create_event("dc1", @topic, 2_000)
       setup_observation(@topic, "dc1", [sub])
 
-      Sweeper.sweep(ttl_native(500), mode: :detailed)
+      Sweeper.sweep(ttl_native(500), strategy: :detailed)
 
       assert_receive {:cycle, measurements}
       assert measurements.expired_count == 1
@@ -462,7 +462,7 @@ defmodule EventBus.Service.SweeperTest do
 
       EventBus.notify_sync(%Event{id: "dl1", topic: topic, data: %{}})
 
-      Sweeper.sweep(ttl_native(0), mode: :detailed)
+      Sweeper.sweep(ttl_native(0), strategy: :detailed)
 
       # Subscriber should still work
       EventBus.notify_sync(%Event{id: "dl2", topic: topic, data: %{}})
@@ -511,6 +511,66 @@ defmodule EventBus.Service.SweeperTest do
 
       if prev_ttl, do: Application.put_env(:event_bus, :event_ttl, prev_ttl), else: Application.delete_env(:event_bus, :event_ttl)
       if prev_interval, do: Application.put_env(:event_bus, :sweep_interval, prev_interval), else: Application.delete_env(:event_bus, :sweep_interval)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Custom strategy
+  # ---------------------------------------------------------------------------
+
+  describe "custom strategy" do
+    defmodule CountingStrategy do
+      @behaviour EventBus.SweepStrategy
+
+      alias EventBus.Manager.Subscription, as: SubscriptionManager
+      alias EventBus.Service.Observation, as: ObservationService
+
+      @impl true
+      def init do
+        limited = SubscriptionManager.limited_subscribers()
+        %{limited: limited, ids: []}
+      end
+
+      @impl true
+      def handle_batch(batch, state) do
+        event_shadows = Enum.map(batch, fn {topic, id, _} -> {topic, id} end)
+        {count, _topics} = ObservationService.expire_batch(event_shadows, state.limited)
+        ids = Enum.map(event_shadows, fn {_topic, id} -> id end)
+        {count, %{state | ids: state.ids ++ ids}}
+      end
+
+      @impl true
+      def telemetry_metadata(state) do
+        %{expired_ids: state.ids}
+      end
+    end
+
+    test "accepts a custom module via strategy: option" do
+      test_pid = self()
+      handler_id = "custom-strategy-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        handler_id,
+        [:event_bus, :sweep, :cycle],
+        fn _name, _measurements, metadata, _config ->
+          send(test_pid, {:meta, metadata})
+        end,
+        nil
+      )
+
+      sub = {CustomSub, nil}
+      create_event("cs1", @topic, 2_000)
+      create_event("cs2", @topic, 2_000)
+      setup_observation(@topic, "cs1", [sub])
+      setup_observation(@topic, "cs2", [sub])
+
+      assert 2 == Sweeper.sweep(ttl_native(500), strategy: CountingStrategy)
+
+      assert_receive {:meta, metadata}
+      assert "cs1" in metadata.expired_ids or "cs2" in metadata.expired_ids
+      assert length(metadata.expired_ids) == 2
+
+      :telemetry.detach(handler_id)
     end
   end
 

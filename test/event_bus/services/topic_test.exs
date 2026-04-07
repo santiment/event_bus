@@ -5,9 +5,14 @@ defmodule EventBus.Service.TopicTest do
 
   doctest Topic
 
+  @config_topics Application.compile_env(:event_bus, :topics, [])
+
   setup do
+    # Re-register config topics in case a prior test removed them
+    Enum.each(@config_topics, &Topic.register/1)
+
     on_exit(fn ->
-      topics = Topic.all() -- [:metrics_received, :metrics_summed]
+      topics = Topic.all() -- @config_topics
       Enum.each(topics, fn topic -> Topic.unregister(topic) end)
     end)
 

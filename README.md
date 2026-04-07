@@ -420,11 +420,11 @@ Configuration:
 
 - `:event_ttl` — maximum event age in milliseconds. `nil` (default) disables the sweeper entirely. Typical values: `60_000` (1 min) for real-time systems, `300_000` (5 min) for general use, `900_000` (15 min) for batch workloads.
 - `:sweep_interval` — how often the sweeper runs, in milliseconds. Defaults to `10_000` (10 seconds).
-- `:sweep_mode` — `:bulk_smart` (default) or `:detailed`. Controls the sweep strategy (see below).
+- `:sweep_strategy` — `:bulk_smart` (default), `:detailed`, or a module implementing `EventBus.SweepStrategy`. See below.
 
 The sweeper never touches events that are still within their TTL, and it does not interfere with normal completion — if all subscribers finish before the TTL, the event is cleaned up immediately as usual.
 
-### Sweep modes
+### Sweep strategies
 
 **`:bulk_smart`** (default) — optimized for throughput. Events are expired in batches of 100 using ETS cursors, so memory stays constant. When no limited subscriptions (`subscribe_once`/`subscribe_n`) exist, the batch is pure ETS deletes with zero GenServer calls. When limited subscriptions are present, only those subscribers incur per-subscriber lookups, and all limit decrements are batched into a single GenServer call. Emits one `[:event_bus, :sweep, :cycle]` telemetry event per sweep with per-topic counts.
 
@@ -433,16 +433,26 @@ The sweeper never touches events that are still within their TTL, and it does no
 ```elixir
 config :event_bus,
   event_ttl: 300_000,
-  sweep_mode: :detailed
+  sweep_strategy: :detailed
 ```
+
+**Custom strategies** — implement the `EventBus.SweepStrategy` behaviour to define your own expiration logic (e.g., dead letter routing, custom metrics, external persistence):
+
+```elixir
+config :event_bus,
+  event_ttl: 300_000,
+  sweep_strategy: MyApp.CustomSweepStrategy
+```
+
+See `EventBus.SweepStrategy` module docs for the callback interface and an example.
 
 ### Telemetry
 
-Both modes emit after each sweep cycle:
+All strategies emit after each sweep cycle:
 
-- `[:event_bus, :sweep, :cycle]` — measurements: `%{expired_count, duration}`, metadata: `%{expired_per_topic: %{topic => count}}` (bulk_smart) or `%{}` (detailed).
+- `[:event_bus, :sweep, :cycle]` — measurements: `%{expired_count, duration}`, metadata provided by the strategy's `telemetry_metadata/1` callback. For `:bulk_smart` this includes `%{expired_per_topic: %{topic => count}}`.
 
-Detailed mode additionally emits per expired event:
+The `:detailed` strategy additionally emits per expired event:
 
 - `[:event_bus, :sweep, :expired]` — measurements: `%{age: native_time}`, metadata: `%{topic, event_id, pending_subscribers}`.
 
