@@ -68,16 +68,14 @@ defmodule EventBus.Service.Sweeper do
       StoreService.select_expired(cutoff, @batch_size)
       |> expire_in_batches(strategy, state, 0)
 
-    if expired_count > 0 do
-      duration = System.monotonic_time() - start_time
-      metadata = strategy.telemetry_metadata(final_state)
+    duration = System.monotonic_time() - start_time
+    metadata = strategy.telemetry_metadata(final_state)
 
-      Telemetry.execute(
-        [:event_bus, :sweep, :cycle],
-        %{expired_count: expired_count, duration: duration},
-        metadata
-      )
-    end
+    Telemetry.execute(
+      [:event_bus, :sweep, :cycle],
+      %{expired_count: expired_count, duration: duration},
+      metadata
+    )
 
     expired_count
   end

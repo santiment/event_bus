@@ -200,7 +200,7 @@ defmodule EventBus.Service.Observation do
     case :ets.lookup(@table, {topic, id}) do
       [{{^topic, ^id}, subscribers, _}] ->
         {completers, skippers} = collect_terminal(topic, id, subscribers)
-        pending = subscribers -- completers ++ skippers
+        pending = pending_subscribers(subscribers, completers, skippers)
 
         # One GenServer call for all pending subscribers in this event.
         batch_decrement_limits(pending, {topic, id})
@@ -249,28 +249,26 @@ defmodule EventBus.Service.Observation do
     {length(to_delete), topic_counts}
   end
 
-  # When no limited subscribers exist, skip all per-subscriber lookups.
-  # Just check that the watcher entry exists (event hasn't been cleaned up).
-  defp collect_batch(event_shadows, limited_set) when map_size(limited_set) == 0 do
-    to_delete =
-      Enum.filter(event_shadows, fn {topic, id} ->
-        :ets.member(@table, {topic, id})
-      end)
-
-    {[], to_delete}
-  end
-
   defp collect_batch(event_shadows, limited_set) do
-    Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow, {dec_acc, del_acc} ->
-      case :ets.lookup(@table, {topic, id}) do
-        [{{^topic, ^id}, subscribers, _}] ->
-          pending_decs = collect_limited_decrements(topic, id, subscribers, limited_set)
-          {pending_decs ++ dec_acc, [shadow | del_acc]}
+    if MapSet.size(limited_set) == 0 do
+      to_delete =
+        Enum.filter(event_shadows, fn {topic, id} ->
+          :ets.member(@table, {topic, id})
+        end)
 
-        _ ->
-          {dec_acc, del_acc}
-      end
-    end)
+      {[], to_delete}
+    else
+      Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow, {dec_acc, del_acc} ->
+        case :ets.lookup(@table, {topic, id}) do
+          [{{^topic, ^id}, subscribers, _}] ->
+            pending_decs = collect_limited_decrements(topic, id, subscribers, limited_set)
+            {pending_decs ++ dec_acc, [shadow | del_acc]}
+
+          _ ->
+            {dec_acc, del_acc}
+        end
+      end)
+    end
   end
 
   defp delete_expired(event_shadows) do
@@ -337,6 +335,11 @@ defmodule EventBus.Service.Observation do
   defp decrement_limit(subscriber, event_shadow) do
     generation = snapshot_generation(event_shadow, subscriber)
     SubscriptionManager.decrement_limit(subscriber, generation)
+  end
+
+  defp pending_subscribers(subscribers, completers, skippers) do
+    terminal = completers ++ skippers
+    subscribers -- terminal
   end
 
   # Atomic compare-and-swap on the status table.

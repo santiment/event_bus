@@ -42,9 +42,9 @@ defmodule EventBus.Service.SweeperTest do
     event
   end
 
-  defp setup_observation(topic, id, subscribers) do
+  defp setup_observation(topic, id, subscribers, snapshot \\ nil) do
     Observation.save({topic, id}, {subscribers, [], []})
-    snapshot = Map.new(subscribers, fn sub -> {sub, 0} end)
+    snapshot = snapshot || Map.new(subscribers, fn sub -> {sub, 0} end)
     Observation.save_snapshot({topic, id}, snapshot)
   end
 
@@ -127,6 +127,45 @@ defmodule EventBus.Service.SweeperTest do
 
     test "returns :not_found for already-cleaned events" do
       assert :not_found == Observation.force_expire({@topic, "nonexistent"})
+    end
+
+    test "does not double-decrement skipped limited subscribers" do
+      topic = :force_expire_limit_test
+      EventBus.register_topic(topic)
+
+      defmodule ForceExpireLimitSub do
+        def process({_topic, _id}), do: :ok
+      end
+
+      blocker = {ForceExpireBlockerSub, nil}
+
+      subscriber = {ForceExpireLimitSub, nil}
+      EventBus.subscribe_n({subscriber, ["force_expire_limit_test"]}, 2)
+
+      {[^subscriber], snapshot1} =
+        SubscriptionManager.prepare_subscribers_for_dispatch([subscriber])
+
+      create_event("fe3", topic)
+      setup_observation(topic, "fe3", [subscriber, blocker], Map.put(snapshot1, blocker, 0))
+
+      {[^subscriber], snapshot2} =
+        SubscriptionManager.prepare_subscribers_for_dispatch([subscriber])
+
+      create_event("fe4", topic)
+      setup_observation(topic, "fe4", [subscriber], snapshot2)
+
+      Observation.mark_as_skipped({subscriber, {topic, "fe3"}})
+      assert EventBus.subscribed?({subscriber, ["force_expire_limit_test"]})
+
+      assert {:ok, _} = Observation.force_expire({topic, "fe3"})
+      # Subscriber should still exist — only one of two events was decremented
+      assert EventBus.subscribed?({subscriber, ["force_expire_limit_test"]})
+
+      assert {:ok, _} = Observation.force_expire({topic, "fe4"})
+      # Now both events expired — remaining=0, in_flight=0 → auto-unsubscribed
+      refute EventBus.subscribed?({subscriber, ["force_expire_limit_test"]})
+
+      EventBus.unregister_topic(topic)
     end
   end
 
@@ -297,6 +336,29 @@ defmodule EventBus.Service.SweeperTest do
       assert 0 == Sweeper.sweep(ttl_native(999_999_999))
     end
 
+    test "emits :cycle telemetry even when no events expire" do
+      test_pid = self()
+      handler_id = "bulk-cycle-empty-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        handler_id,
+        [:event_bus, :sweep, :cycle],
+        fn _name, measurements, metadata, _config ->
+          send(test_pid, {:cycle, measurements, metadata})
+        end,
+        nil
+      )
+
+      assert 0 == Sweeper.sweep(ttl_native(999_999_999))
+
+      assert_receive {:cycle, measurements, metadata}
+      assert measurements.expired_count == 0
+      assert is_integer(measurements.duration)
+      assert metadata.expired_per_topic == %{}
+
+      :telemetry.detach(handler_id)
+    end
+
     test "cleans all four ETS tables" do
       sub = {CleanSub, nil}
       create_event("clean1", @topic, 2_000)
@@ -421,6 +483,34 @@ defmodule EventBus.Service.SweeperTest do
       assert metadata.topic == @topic
       assert metadata.event_id == "dt1"
       assert metadata.pending_subscribers == [sub]
+
+      :telemetry.detach(handler_id)
+    end
+
+    test "excludes skipped subscribers from pending_subscribers telemetry" do
+      test_pid = self()
+      handler_id = "detail-expired-skipped-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        handler_id,
+        [:event_bus, :sweep, :expired],
+        fn _name, measurements, metadata, _config ->
+          send(test_pid, {:expired, measurements, metadata})
+        end,
+        nil
+      )
+
+      pending_sub = {DetailPendingSub, nil}
+      skipped_sub = {DetailSkippedSub, nil}
+
+      create_event("dt2", @topic, 2_000)
+      setup_observation(@topic, "dt2", [pending_sub, skipped_sub])
+      Observation.mark_as_skipped({skipped_sub, {@topic, "dt2"}})
+
+      Sweeper.sweep(ttl_native(500), strategy: :detailed)
+
+      assert_receive {:expired, _measurements, metadata}
+      assert metadata.pending_subscribers == [pending_sub]
 
       :telemetry.detach(handler_id)
     end

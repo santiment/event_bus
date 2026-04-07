@@ -34,7 +34,7 @@ defmodule EventBus.SweepStrategy.Detailed do
   defp expire_event({topic, id}, inserted_at) do
     case ObservationService.force_expire({topic, id}) do
       {:ok, info} ->
-        pending = info.subscribers -- info.completers ++ info.skippers
+        pending = info.subscribers -- (info.completers ++ info.skippers)
         age = System.monotonic_time() - inserted_at
 
         Telemetry.execute(
