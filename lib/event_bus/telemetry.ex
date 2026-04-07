@@ -21,9 +21,14 @@ defmodule EventBus.Telemetry do
       * Measurements: `%{subscriber_count: integer()}`
       * Metadata: `%{topic: atom(), event_id: term(), completers: list(), skippers: list()}`
 
+    * `[:event_bus, :sweep, :expired]` — per expired event (`:detailed` mode only)
+      * Measurements: `%{age: integer()}`
+      * Metadata: `%{topic: atom(), event_id: term(), pending_subscribers: list()}`
+
     * `[:event_bus, :sweep, :cycle]` — after a sweep cycle that expired at least one event
       * Measurements: `%{expired_count: integer(), duration: integer()}`
-      * Metadata: `%{}`
+      * Metadata: `%{expired_per_topic: %{atom() => integer()}}` (`:bulk_smart` mode)
+        or `%{}` (`:detailed` mode)
 
   If `:telemetry` is not available, all calls are no-ops.
   """

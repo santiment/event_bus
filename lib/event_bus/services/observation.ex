@@ -223,49 +223,91 @@ defmodule EventBus.Service.Observation do
   @doc """
   Expire a batch of event shadows in a single pass.
 
-  For each event, collects pending subscribers that need limit decrements,
-  then makes ONE GenServer call for the entire batch. Events already cleaned
-  up by normal completion are skipped. Returns the number of events expired.
+  `limited_set` is a `MapSet` of subscribers that currently have active limits
+  (`subscribe_once`/`subscribe_n`). When the set is empty, the entire batch is
+  expired with pure ETS operations and zero GenServer calls. When non-empty,
+  only the limited subscribers need status/snapshot lookups and a single batched
+  GenServer call.
+
+  Events already cleaned up by normal completion are skipped.
+  Returns `{expired_count, topic_counts}` where `topic_counts` is a map of
+  `%{topic => count}` for the events actually expired in this batch.
   """
-  @spec expire_batch([event_shadow()]) :: non_neg_integer()
-  def expire_batch(event_shadows) do
-    # Phase 1: Read watcher entries and collect pending decrements.
-    {decrements, to_delete} =
-      Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow, {dec_acc, del_acc} ->
-        case :ets.lookup(@table, {topic, id}) do
-          [{{^topic, ^id}, subscribers, _}] ->
-            pending_decs = collect_pending_decrements(topic, id, subscribers)
-            {pending_decs ++ dec_acc, [shadow | del_acc]}
+  @spec expire_batch([event_shadow()], MapSet.t()) ::
+          {non_neg_integer(), %{optional(atom()) => non_neg_integer()}}
+  def expire_batch(event_shadows, limited_set) do
+    {decrements, to_delete} = collect_batch(event_shadows, limited_set)
 
-          _ ->
-            # Already cleaned up by normal completion
-            {dec_acc, del_acc}
-        end
-      end)
-
-    # Phase 2: One GenServer call for ALL limit decrements across the batch.
+    # One GenServer call for ALL limit decrements across the batch.
+    # No-op when the list is empty (common path — no limited subscribers).
     SubscriptionManager.decrement_limits(decrements)
 
-    # Phase 3: Delete from all ETS tables.
-    Enum.each(to_delete, fn {topic, id} ->
-      :ets.delete(@table, {topic, id})
-      :ets.match_delete(@status_table, {{topic, id, :_}, :_})
-      :ets.delete(@snapshot_table, {topic, id})
-      Debug.clean_dispatch_metadata(topic, id)
-      StoreService.delete({topic, id})
-    end)
+    # Delete from all ETS tables.
+    delete_expired(to_delete)
 
-    length(to_delete)
+    topic_counts = Enum.frequencies_by(to_delete, fn {topic, _id} -> topic end)
+    {length(to_delete), topic_counts}
   end
 
-  # Build [{subscriber, generation}, ...] for pending subscribers only.
-  @spec collect_pending_decrements(topic(), EventBus.event_id(), subscribers()) ::
-          [{EventBus.subscriber(), non_neg_integer()}]
-  defp collect_pending_decrements(topic, id, subscribers) do
+  # When no limited subscribers exist, skip all per-subscriber lookups.
+  # Just check that the watcher entry exists (event hasn't been cleaned up).
+  defp collect_batch(event_shadows, limited_set) when map_size(limited_set) == 0 do
+    to_delete =
+      Enum.filter(event_shadows, fn {topic, id} ->
+        :ets.member(@table, {topic, id})
+      end)
+
+    {[], to_delete}
+  end
+
+  defp collect_batch(event_shadows, limited_set) do
+    Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow, {dec_acc, del_acc} ->
+      case :ets.lookup(@table, {topic, id}) do
+        [{{^topic, ^id}, subscribers, _}] ->
+          pending_decs = collect_limited_decrements(topic, id, subscribers, limited_set)
+          {pending_decs ++ dec_acc, [shadow | del_acc]}
+
+        _ ->
+          {dec_acc, del_acc}
+      end
+    end)
+  end
+
+  defp delete_expired(event_shadows) do
+    # One scan for all status entries (instead of N match_deletes)
+    batch_select_delete(@status_table, event_shadows, fn {topic, id} ->
+      {{{topic, id, :_}, :_}, [], [true]}
+    end)
+
+    # One scan for all debug dispatch metadata
+    Debug.batch_clean_dispatch_metadata(event_shadows)
+
+    # Individual O(1) hash deletes for exact-key tables
+    Enum.each(event_shadows, fn {topic, id} ->
+      :ets.delete(@table, {topic, id})
+      :ets.delete(@snapshot_table, {topic, id})
+      StoreService.delete({topic, id})
+    end)
+  end
+
+  defp batch_select_delete(_table, [], _spec_fn), do: :ok
+
+  defp batch_select_delete(table, event_shadows, spec_fn) do
+    match_spec = Enum.map(event_shadows, spec_fn)
+    :ets.select_delete(table, match_spec)
+    :ok
+  end
+
+  # Only look up status/snapshot for subscribers that are in the limited set.
+  defp collect_limited_decrements(topic, id, subscribers, limited_set) do
     Enum.flat_map(subscribers, fn sub ->
-      case :ets.lookup(@status_table, {topic, id, sub}) do
-        [{_, :pending}] -> [{sub, snapshot_generation({topic, id}, sub)}]
-        _ -> []
+      if MapSet.member?(limited_set, sub) do
+        case :ets.lookup(@status_table, {topic, id, sub}) do
+          [{_, :pending}] -> [{sub, snapshot_generation({topic, id}, sub)}]
+          _ -> []
+        end
+      else
+        []
       end
     end)
   end

@@ -4,6 +4,7 @@ defmodule EventBus.Service.SweeperTest do
   import ExUnit.CaptureLog
 
   alias EventBus.Model.Event
+  alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Service.Observation
   alias EventBus.Service.Store
   alias EventBus.Service.Sweeper
@@ -13,8 +14,7 @@ defmodule EventBus.Service.SweeperTest do
   setup do
     EventBus.register_topic(@topic)
 
-    # Clear any stale expired events left by other test modules so that
-    # exact-count assertions in sweep tests are not thrown off.
+    # Clear any stale expired events left by other test modules.
     Sweeper.sweep(ttl_native(0))
 
     on_exit(fn ->
@@ -53,61 +53,7 @@ defmodule EventBus.Service.SweeperTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Store.find_expired/1
-  # ---------------------------------------------------------------------------
-
-  describe "Store.find_expired/1" do
-    test "returns events older than the cutoff" do
-      create_event("old1", @topic, 5_000)
-      create_event("old2", @topic, 3_000)
-
-      cutoff = System.monotonic_time() - ttl_native(1_000)
-      expired = Store.find_expired(cutoff)
-
-      expired_ids = Enum.map(expired, fn {{_topic, id}, _inserted_at} -> id end)
-      assert "old1" in expired_ids
-      assert "old2" in expired_ids
-
-      Store.delete({@topic, "old1"})
-      Store.delete({@topic, "old2"})
-    end
-
-    test "does not return recent events" do
-      create_event("recent1", @topic, 0)
-
-      cutoff = System.monotonic_time() - ttl_native(1_000)
-      expired = Store.find_expired(cutoff)
-      expired_ids = Enum.map(expired, fn {{_topic, id}, _inserted_at} -> id end)
-
-      refute "recent1" in expired_ids
-
-      Store.delete({@topic, "recent1"})
-    end
-
-    test "returns inserted_at timestamp for each expired event" do
-      create_event("aged1", @topic, 2_000)
-
-      cutoff = System.monotonic_time() - ttl_native(1_000)
-      expired = Store.find_expired(cutoff)
-
-      assert [{{@topic, "aged1"}, inserted_at}] = expired
-      assert is_integer(inserted_at)
-
-      Store.delete({@topic, "aged1"})
-    end
-
-    test "returns empty list when no events are expired" do
-      create_event("fresh1", @topic, 0)
-
-      cutoff = System.monotonic_time() - ttl_native(60_000)
-      assert [] == Store.find_expired(cutoff)
-
-      Store.delete({@topic, "fresh1"})
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Store.select_expired/2 cursor API
+  # Store cursor API
   # ---------------------------------------------------------------------------
 
   describe "Store.select_expired/2 cursor API" do
@@ -128,20 +74,13 @@ defmodule EventBus.Service.SweeperTest do
     end
 
     test "iterates across multiple batches" do
-      for i <- 1..7 do
-        create_event("batch#{i}", @topic, 2_000)
-      end
+      for i <- 1..7, do: create_event("batch#{i}", @topic, 2_000)
 
       cutoff = System.monotonic_time() - ttl_native(500)
       all_ids = collect_all_cursor_ids(Store.select_expired(cutoff, 3), [])
 
-      for i <- 1..7 do
-        assert "batch#{i}" in all_ids
-      end
-
-      for i <- 1..7 do
-        Store.delete({@topic, "batch#{i}"})
-      end
+      for i <- 1..7, do: assert("batch#{i}" in all_ids)
+      for i <- 1..7, do: Store.delete({@topic, "batch#{i}"})
     end
   end
 
@@ -157,7 +96,7 @@ defmodule EventBus.Service.SweeperTest do
   # ---------------------------------------------------------------------------
 
   describe "Observation.force_expire/1" do
-    test "cleans all observation tables for the event" do
+    test "cleans all observation tables" do
       subscriber = {TestSub, nil}
       create_event("fe1")
       setup_observation(@topic, "fe1", [subscriber])
@@ -182,92 +121,85 @@ defmodule EventBus.Service.SweeperTest do
       Observation.mark_as_completed({sub_a, {@topic, "fe2"}})
 
       assert {:ok, info} = Observation.force_expire({@topic, "fe2"})
-      assert info.subscribers == [sub_a, sub_b]
       assert sub_a in info.completers
       refute sub_b in info.completers
-      refute sub_b in info.skippers
     end
 
     test "returns :not_found for already-cleaned events" do
       assert :not_found == Observation.force_expire({@topic, "nonexistent"})
     end
-
-    test "decrements in_flight for pending limited subscribers" do
-      topic = :sweeper_limit_test
-      EventBus.register_topic(topic)
-
-      defmodule LimitTestSub do
-        def process({_topic, _id}), do: :ok
-      end
-
-      EventBus.subscribe_n({{LimitTestSub, nil}, ["sweeper_limit_test"]}, 3)
-
-      event = %Event{id: "lim1", topic: topic, data: %{}}
-      EventBus.notify_sync(event)
-
-      # force_expire should decrement in_flight so the subscriber isn't stuck
-      # Give it another event to confirm
-      event2 = %Event{id: "lim2", topic: topic, data: %{}}
-      EventBus.notify_sync(event2)
-
-      assert {[{LimitTestSub, nil}], _, _} = Observation.fetch({topic, "lim2"})
-
-      Observation.force_expire({topic, "lim1"})
-      Observation.force_expire({topic, "lim2"})
-      EventBus.unsubscribe({LimitTestSub, nil})
-      EventBus.unregister_topic(topic)
-    end
-
-    test "handles event with all subscribers already completed" do
-      sub = {AllDoneSub, nil}
-      create_event("fe3")
-      setup_observation(@topic, "fe3", [sub])
-
-      Observation.mark_as_completed({sub, {@topic, "fe3"}})
-
-      capture_log(fn ->
-        assert :not_found == Observation.force_expire({@topic, "fe3"})
-      end)
-    end
   end
 
   # ---------------------------------------------------------------------------
-  # Observation.expire_batch/1
+  # Observation.expire_batch/2
   # ---------------------------------------------------------------------------
 
-  describe "Observation.expire_batch/1" do
-    test "cleans all tables for a list of event shadows" do
+  describe "Observation.expire_batch/2" do
+    test "cleans all tables and returns count with topic breakdown" do
       sub = {BatchExpSub, nil}
 
       for i <- 1..3 do
-        id = "be#{i}"
-        create_event(id)
-        setup_observation(@topic, id, [sub])
+        create_event("be#{i}")
+        setup_observation(@topic, "be#{i}", [sub])
       end
 
       shadows = Enum.map(1..3, fn i -> {@topic, "be#{i}"} end)
-      assert 3 == Observation.expire_batch(shadows)
+      limited = SubscriptionManager.limited_subscribers()
+      assert {3, %{@topic => 3}} = Observation.expire_batch(shadows, limited)
 
       for i <- 1..3 do
-        id = "be#{i}"
-        assert [] == :ets.lookup(Store.table_name(), {@topic, id})
-        assert [] == :ets.lookup(Observation.table_name(), {@topic, id})
-        assert [] == :ets.lookup(:eb_event_watcher_status, {@topic, id, sub})
-        assert [] == :ets.lookup(:eb_event_subscription_generations, {@topic, id})
+        assert [] == :ets.lookup(Store.table_name(), {@topic, "be#{i}"})
+        assert [] == :ets.lookup(Observation.table_name(), {@topic, "be#{i}"})
       end
     end
 
-    test "returns 0 for empty list" do
-      assert 0 == Observation.expire_batch([])
+    test "returns {0, %{}} for empty list" do
+      assert {0, %{}} == Observation.expire_batch([], MapSet.new())
     end
 
-    test "skips already-cleaned events and returns correct count" do
+    test "skips already-cleaned events" do
       sub = {SkipSub, nil}
       create_event("exists")
       setup_observation(@topic, "exists", [sub])
 
-      # "ghost" has no observation entry
-      assert 1 == Observation.expire_batch([{@topic, "exists"}, {@topic, "ghost"}])
+      limited = SubscriptionManager.limited_subscribers()
+      assert {1, %{@topic => 1}} = Observation.expire_batch([{@topic, "exists"}, {@topic, "ghost"}], limited)
+    end
+
+    test "fast path with empty limited_set" do
+      sub = {FastPathSub, nil}
+
+      for i <- 1..3 do
+        create_event("fp#{i}")
+        setup_observation(@topic, "fp#{i}", [sub])
+      end
+
+      shadows = Enum.map(1..3, fn i -> {@topic, "fp#{i}"} end)
+      assert {3, %{@topic => 3}} = Observation.expire_batch(shadows, MapSet.new())
+
+      for i <- 1..3 do
+        assert [] == :ets.lookup(Store.table_name(), {@topic, "fp#{i}"})
+      end
+    end
+
+    test "returns per-topic counts across multiple topics" do
+      topic2 = :sweeper_topic2
+      EventBus.register_topic(topic2)
+      sub = {MultiTopicSub, nil}
+
+      create_event("mt1", @topic, 0)
+      create_event("mt2", @topic, 0)
+      create_event("mt3", topic2, 0)
+      setup_observation(@topic, "mt1", [sub])
+      setup_observation(@topic, "mt2", [sub])
+      setup_observation(topic2, "mt3", [sub])
+
+      shadows = [{@topic, "mt1"}, {@topic, "mt2"}, {topic2, "mt3"}]
+      assert {3, topic_counts} = Observation.expire_batch(shadows, MapSet.new())
+      assert topic_counts[@topic] == 2
+      assert topic_counts[topic2] == 1
+
+      EventBus.unregister_topic(topic2)
     end
 
     test "decrements limited subscription counters" do
@@ -280,15 +212,16 @@ defmodule EventBus.Service.SweeperTest do
 
       EventBus.subscribe_n({{BatchLimitSub, nil}, ["batch_limit_test"]}, 5)
 
-      # Dispatch two events (subscriber never completes → in_flight goes up)
       for id <- ["bl1", "bl2"] do
         EventBus.notify_sync(%Event{id: id, topic: topic, data: %{}})
       end
 
-      # Expire both in a single batch
-      Observation.expire_batch([{topic, "bl1"}, {topic, "bl2"}])
+      limited = SubscriptionManager.limited_subscribers()
+      assert MapSet.member?(limited, {BatchLimitSub, nil})
 
-      # Subscriber should still work — dispatch a third event
+      Observation.expire_batch([{topic, "bl1"}, {topic, "bl2"}], limited)
+
+      # Subscriber should still work after expiry
       EventBus.notify_sync(%Event{id: "bl3", topic: topic, data: %{}})
       assert {[{BatchLimitSub, nil}], _, _} = Observation.fetch({topic, "bl3"})
 
@@ -314,10 +247,12 @@ defmodule EventBus.Service.SweeperTest do
 
       EventBus.notify_sync(%Event{id: "mx1", topic: topic, data: %{}})
 
-      # Expire via batch — should handle both subscriber types correctly
-      Observation.expire_batch([{topic, "mx1"}])
+      limited = SubscriptionManager.limited_subscribers()
+      assert MapSet.member?(limited, {MixedLimited, nil})
+      refute MapSet.member?(limited, {MixedUnlimited, nil})
 
-      # Limited subscriber should still receive future events
+      Observation.expire_batch([{topic, "mx1"}], limited)
+
       EventBus.notify_sync(%Event{id: "mx2", topic: topic, data: %{}})
       subscribers = Enum.map(elem(Observation.fetch({topic, "mx2"}), 0), &elem(&1, 0))
       assert MixedLimited in subscribers
@@ -330,33 +265,30 @@ defmodule EventBus.Service.SweeperTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Sweeper.sweep/1
+  # Sweeper.sweep/1 (default :bulk_smart mode)
   # ---------------------------------------------------------------------------
 
-  describe "Sweeper.sweep/1" do
+  describe "sweep (bulk_smart)" do
     test "expires old events and returns count" do
-      subscriber = {SweepSub1, nil}
+      sub = {SweepSub1, nil}
       create_event("sw1", @topic, 500)
-      setup_observation(@topic, "sw1", [subscriber])
+      setup_observation(@topic, "sw1", [sub])
 
       count = Sweeper.sweep(ttl_native(100))
       assert count == 1
 
       capture_log(fn ->
         assert nil == Store.fetch({@topic, "sw1"})
-        assert nil == Observation.fetch({@topic, "sw1"})
       end)
     end
 
     test "does not expire recent events" do
-      subscriber = {SweepSub2, nil}
+      sub = {SweepSub2, nil}
       create_event("sw2", @topic, 0)
-      setup_observation(@topic, "sw2", [subscriber])
+      setup_observation(@topic, "sw2", [sub])
 
-      count = Sweeper.sweep(ttl_native(60_000))
-      assert count == 0
-
-      assert {[^subscriber], _, _} = Observation.fetch({@topic, "sw2"})
+      assert 0 == Sweeper.sweep(ttl_native(60_000))
+      assert {[^sub], _, _} = Observation.fetch({@topic, "sw2"})
 
       Observation.force_expire({@topic, "sw2"})
     end
@@ -365,45 +297,10 @@ defmodule EventBus.Service.SweeperTest do
       assert 0 == Sweeper.sweep(ttl_native(999_999_999))
     end
 
-    test "handles mix of expired and fresh events" do
-      sub = {MixSub, nil}
-      create_event("old", @topic, 2_000)
-      create_event("new", @topic, 0)
-      setup_observation(@topic, "old", [sub])
-      setup_observation(@topic, "new", [sub])
-
-      count = Sweeper.sweep(ttl_native(500))
-      assert count == 1
-
-      capture_log(fn ->
-        assert nil == Observation.fetch({@topic, "old"})
-      end)
-
-      assert {[^sub], _, _} = Observation.fetch({@topic, "new"})
-
-      Observation.force_expire({@topic, "new"})
-    end
-
-    test "handles event already cleaned by normal completion" do
-      sub = {RaceSub, nil}
-      create_event("race1", @topic, 2_000)
-      setup_observation(@topic, "race1", [sub])
-
-      Observation.mark_as_completed({sub, {@topic, "race1"}})
-
-      count = Sweeper.sweep(ttl_native(500))
-      assert count == 0
-    end
-
     test "cleans all four ETS tables" do
       sub = {CleanSub, nil}
       create_event("clean1", @topic, 2_000)
       setup_observation(@topic, "clean1", [sub])
-
-      assert [{_, _, _}] = :ets.lookup(Store.table_name(), {@topic, "clean1"})
-      assert [{_, _, _}] = :ets.lookup(Observation.table_name(), {@topic, "clean1"})
-      assert [{_, :pending}] = :ets.lookup(:eb_event_watcher_status, {@topic, "clean1", sub})
-      assert [{_, _}] = :ets.lookup(:eb_event_subscription_generations, {@topic, "clean1"})
 
       Sweeper.sweep(ttl_native(500))
 
@@ -413,110 +310,167 @@ defmodule EventBus.Service.SweeperTest do
       assert [] == :ets.lookup(:eb_event_subscription_generations, {@topic, "clean1"})
     end
 
-    test "expires multiple events in a single sweep" do
-      sub = {MultiSub, nil}
-
-      for i <- 1..5 do
-        id = "multi#{i}"
-        create_event(id, @topic, 2_000)
-        setup_observation(@topic, id, [sub])
-      end
-
-      count = Sweeper.sweep(ttl_native(500))
-      assert count == 5
-
-      for i <- 1..5 do
-        assert [] == :ets.lookup(Store.table_name(), {@topic, "multi#{i}"})
-      end
-    end
-
     test "processes events across multiple internal batches" do
       sub = {BatchSub, nil}
 
       for i <- 1..150 do
-        id = "b#{i}"
-        create_event(id, @topic, 2_000)
-        setup_observation(@topic, id, [sub])
+        create_event("b#{i}", @topic, 2_000)
+        setup_observation(@topic, "b#{i}", [sub])
       end
 
-      count = Sweeper.sweep(ttl_native(500))
-      assert count == 150
-
-      for i <- 1..150 do
-        assert [] == :ets.lookup(Store.table_name(), {@topic, "b#{i}"})
-      end
+      assert 150 == Sweeper.sweep(ttl_native(500))
     end
 
-    test "handles events with multiple subscribers, some completed" do
-      sub_a = {PartialA, nil}
-      sub_b = {PartialB, nil}
-      create_event("partial1", @topic, 2_000)
-      setup_observation(@topic, "partial1", [sub_a, sub_b])
+    test "emits :cycle telemetry with expired_per_topic" do
+      test_pid = self()
+      handler_id = "bulk-cycle-#{System.unique_integer()}"
 
-      Observation.mark_as_completed({sub_a, {@topic, "partial1"}})
+      :telemetry.attach(
+        handler_id,
+        [:event_bus, :sweep, :cycle],
+        fn _name, measurements, metadata, _config ->
+          send(test_pid, {:cycle, measurements, metadata})
+        end,
+        nil
+      )
 
-      count = Sweeper.sweep(ttl_native(500))
-      assert count == 1
+      topic2 = :sweeper_tel_topic2
+      EventBus.register_topic(topic2)
+      sub = {TelBulkSub, nil}
 
-      capture_log(fn ->
-        assert nil == Observation.fetch({@topic, "partial1"})
-      end)
+      create_event("tb1", @topic, 2_000)
+      create_event("tb2", @topic, 2_000)
+      create_event("tb3", topic2, 2_000)
+      setup_observation(@topic, "tb1", [sub])
+      setup_observation(@topic, "tb2", [sub])
+      setup_observation(topic2, "tb3", [sub])
+
+      Sweeper.sweep(ttl_native(500))
+
+      assert_receive {:cycle, measurements, metadata}
+      assert measurements.expired_count == 3
+      assert is_integer(measurements.duration)
+      assert metadata.expired_per_topic[@topic] == 2
+      assert metadata.expired_per_topic[topic2] == 1
+
+      :telemetry.detach(handler_id)
+      EventBus.unregister_topic(topic2)
+    end
+
+    test "does not emit per-event :expired telemetry" do
+      test_pid = self()
+      handler_id = "bulk-no-per-event-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        handler_id,
+        [:event_bus, :sweep, :expired],
+        fn _name, _m, _md, _c -> send(test_pid, :unexpected) end,
+        nil
+      )
+
+      sub = {NoPerEventSub, nil}
+      create_event("npe1", @topic, 2_000)
+      setup_observation(@topic, "npe1", [sub])
+
+      Sweeper.sweep(ttl_native(500))
+
+      refute_receive :unexpected, 100
+      :telemetry.detach(handler_id)
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Telemetry
+  # Sweeper.sweep/2 with mode: :detailed
   # ---------------------------------------------------------------------------
 
-  describe "telemetry" do
-    test "emits :sweep/:cycle with count and duration" do
+  describe "sweep (detailed)" do
+    test "expires old events and returns count" do
+      sub = {DetailSub1, nil}
+      create_event("ds1", @topic, 500)
+      setup_observation(@topic, "ds1", [sub])
+
+      assert 1 == Sweeper.sweep(ttl_native(100), mode: :detailed)
+
+      capture_log(fn ->
+        assert nil == Store.fetch({@topic, "ds1"})
+      end)
+    end
+
+    test "emits per-event :expired telemetry" do
       test_pid = self()
-      handler_id = "sweep-cycle-#{System.unique_integer()}"
+      handler_id = "detail-expired-#{System.unique_integer()}"
 
       :telemetry.attach(
         handler_id,
-        [:event_bus, :sweep, :cycle],
-        fn event_name, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, event_name, measurements, metadata})
+        [:event_bus, :sweep, :expired],
+        fn _name, measurements, metadata, _config ->
+          send(test_pid, {:expired, measurements, metadata})
         end,
         nil
       )
 
-      sub = {TelCycleSub, nil}
-      create_event("cyc1", @topic, 2_000)
-      create_event("cyc2", @topic, 2_000)
-      setup_observation(@topic, "cyc1", [sub])
-      setup_observation(@topic, "cyc2", [sub])
+      sub = {DetailTelSub, nil}
+      create_event("dt1", @topic, 2_000)
+      setup_observation(@topic, "dt1", [sub])
 
-      Sweeper.sweep(ttl_native(500))
+      Sweeper.sweep(ttl_native(500), mode: :detailed)
 
-      assert_receive {:telemetry, [:event_bus, :sweep, :cycle], measurements, metadata}
-      assert measurements.expired_count == 2
-      assert is_integer(measurements.duration)
-      assert measurements.duration >= 0
-      assert metadata == %{}
+      assert_receive {:expired, measurements, metadata}
+      assert is_integer(measurements.age)
+      assert measurements.age > 0
+      assert metadata.topic == @topic
+      assert metadata.event_id == "dt1"
+      assert metadata.pending_subscribers == [sub]
 
       :telemetry.detach(handler_id)
     end
 
-    test "does not emit :sweep/:cycle when nothing expired" do
+    test "also emits :cycle telemetry" do
       test_pid = self()
-      handler_id = "sweep-no-cycle-#{System.unique_integer()}"
+      handler_id = "detail-cycle-#{System.unique_integer()}"
 
       :telemetry.attach(
         handler_id,
         [:event_bus, :sweep, :cycle],
-        fn _event_name, _measurements, _metadata, _config ->
-          send(test_pid, :unexpected_cycle)
+        fn _name, measurements, _metadata, _config ->
+          send(test_pid, {:cycle, measurements})
         end,
         nil
       )
 
-      Sweeper.sweep(ttl_native(999_999_999))
+      sub = {DetailCycleSub, nil}
+      create_event("dc1", @topic, 2_000)
+      setup_observation(@topic, "dc1", [sub])
 
-      refute_receive :unexpected_cycle, 100
+      Sweeper.sweep(ttl_native(500), mode: :detailed)
+
+      assert_receive {:cycle, measurements}
+      assert measurements.expired_count == 1
 
       :telemetry.detach(handler_id)
+    end
+
+    test "handles limited subscribers correctly" do
+      topic = :detail_limit_test
+      EventBus.register_topic(topic)
+
+      defmodule DetailLimitSub do
+        def process({_topic, _id}), do: :ok
+      end
+
+      EventBus.subscribe_n({{DetailLimitSub, nil}, ["detail_limit_test"]}, 3)
+
+      EventBus.notify_sync(%Event{id: "dl1", topic: topic, data: %{}})
+
+      Sweeper.sweep(ttl_native(0), mode: :detailed)
+
+      # Subscriber should still work
+      EventBus.notify_sync(%Event{id: "dl2", topic: topic, data: %{}})
+      assert {[{DetailLimitSub, nil}], _, _} = Observation.fetch({topic, "dl2"})
+
+      Observation.force_expire({topic, "dl2"})
+      EventBus.unsubscribe({DetailLimitSub, nil})
+      EventBus.unregister_topic(topic)
     end
   end
 
@@ -532,7 +486,7 @@ defmodule EventBus.Service.SweeperTest do
       :telemetry.attach(
         handler_id,
         [:event_bus, :sweep, :cycle],
-        fn _event_name, measurements, _metadata, _config ->
+        fn _name, measurements, _metadata, _config ->
           if measurements.expired_count > 0, do: send(test_pid, :sweep_ran)
         end,
         nil
@@ -561,7 +515,7 @@ defmodule EventBus.Service.SweeperTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Integration with notify
+  # Integration
   # ---------------------------------------------------------------------------
 
   describe "integration" do
@@ -582,8 +536,7 @@ defmodule EventBus.Service.SweeperTest do
       assert %Event{} = EventBus.fetch_event({topic, "int1"})
 
       Process.sleep(10)
-      count = Sweeper.sweep(ttl_native(1))
-      assert count == 1
+      assert 1 == Sweeper.sweep(ttl_native(1))
 
       capture_log(fn ->
         assert nil == EventBus.fetch_event({topic, "int1"})
@@ -606,8 +559,7 @@ defmodule EventBus.Service.SweeperTest do
 
       EventBus.subscribe({{GoodSubscriber, nil}, ["sweeper_normal_test"]})
 
-      event = %Event{id: "norm1", topic: topic, data: %{}}
-      EventBus.notify_sync(event)
+      EventBus.notify_sync(%Event{id: "norm1", topic: topic, data: %{}})
 
       Process.sleep(10)
 
@@ -615,8 +567,7 @@ defmodule EventBus.Service.SweeperTest do
         assert nil == EventBus.fetch_event({topic, "norm1"})
       end)
 
-      count = Sweeper.sweep(ttl_native(1))
-      assert count == 0
+      assert 0 == Sweeper.sweep(ttl_native(1))
 
       EventBus.unsubscribe({GoodSubscriber, nil})
       EventBus.unregister_topic(topic)

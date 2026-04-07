@@ -76,6 +76,20 @@ defmodule EventBus.Service.Debug do
   end
 
   @doc false
+  @spec batch_clean_dispatch_metadata([{atom(), term()}]) :: :ok
+  def batch_clean_dispatch_metadata([]), do: :ok
+
+  def batch_clean_dispatch_metadata(event_shadows) do
+    match_spec =
+      Enum.map(event_shadows, fn {topic, id} ->
+        {{{:_, topic, id}, :_}, [], [true]}
+      end)
+
+    :ets.select_delete(@dispatch_table, match_spec)
+    :ok
+  end
+
+  @doc false
   @spec log(String.t()) :: :ok
   def log(message) do
     if enabled?() do

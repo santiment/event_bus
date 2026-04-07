@@ -180,6 +180,16 @@ defmodule EventBus.Manager.Subscription do
     GenServer.call(__MODULE__, {:decrement_limits, subscriber_generations})
   end
 
+  @doc """
+  Return the set of subscribers that currently have active limits
+  (`subscribe_once`/`subscribe_n`). Used by the sweeper to skip per-subscriber
+  work for unlimited subscribers.
+  """
+  @spec limited_subscribers() :: MapSet.t(subscriber())
+  def limited_subscribers do
+    GenServer.call(__MODULE__, :limited_subscribers)
+  end
+
   ###########################################################################
   # DELEGATIONS
   ###########################################################################
@@ -271,6 +281,12 @@ defmodule EventBus.Manager.Subscription do
       end)
 
     {:reply, :ok, state}
+  end
+
+  @doc false
+  def handle_call(:limited_subscribers, _from, state) do
+    limited = state.limits |> Map.keys() |> MapSet.new()
+    {:reply, limited, state}
   end
 
   defp normalize_opts!(opts) when is_list(opts) do
