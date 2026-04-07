@@ -16,6 +16,7 @@ This repository is a maintained and modernized fork of [otobus/event_bus](https:
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Usage](#usage)
+- [TTL and event expiration](#ttl-and-event-expiration)
 - [Debug mode](#debug-mode)
 - [Storage model](#storage-model)
 - [Documentation and ecosystem](#documentation-and-ecosystem)
@@ -400,6 +401,46 @@ See [`examples/`](examples/) for ready-to-use patterns:
 - [`examples/genserver_subscriber.ex`](examples/genserver_subscriber.ex) - asynchronous processing via GenServer
 - [`examples/configured_subscriber.ex`](examples/configured_subscriber.ex) - configured subscribers with `{Module, config}`
 - [`examples/persistent_store_subscriber.ex`](examples/persistent_store_subscriber.ex) - persisting all events to a data store
+
+## TTL and event expiration
+
+EventBus stores events in ETS until every subscriber reaches a terminal state (`mark_as_completed` or `mark_as_skipped`). If a subscriber never completes — due to a bug, a crashed downstream process, or a forgotten `mark_as_completed` call — the event stays in memory indefinitely.
+
+To prevent unbounded memory growth, enable the built-in sweeper:
+
+```elixir
+config :event_bus,
+  event_ttl: 300_000,      # 5 minutes, in milliseconds
+  sweep_interval: 10_000   # 10 seconds (default)
+```
+
+When `event_ttl` is set, a background process periodically scans the event store and removes events older than the TTL. The age is measured from the bus-owned insertion timestamp, not from user-provided event fields.
+
+Configuration:
+
+- `:event_ttl` — maximum event age in milliseconds. `nil` (default) disables the sweeper entirely. Typical values: `60_000` (1 min) for real-time systems, `300_000` (5 min) for general use, `900_000` (15 min) for batch workloads.
+- `:sweep_interval` — how often the sweeper runs, in milliseconds. Defaults to `10_000` (10 seconds).
+What happens during a sweep:
+
+1. Expired events are scanned in batches of 100 using ETS cursors, so memory usage stays constant regardless of how many events have expired.
+2. For each batch, pending subscribers that use limited subscriptions (`subscribe_once`/`subscribe_n`) have their counters adjusted in a single batched call — unlimited subscribers are skipped with zero overhead.
+3. All ETS entries (store, watchers, status, snapshots) are deleted.
+4. A telemetry event is emitted at the end of the cycle.
+
+The sweeper never touches events that are still within their TTL, and it does not interfere with normal completion — if all subscribers finish before the TTL, the event is cleaned up immediately as usual.
+
+### Telemetry
+
+The sweeper emits:
+
+- `[:event_bus, :sweep, :cycle]` — after each sweep that expired at least one event, with `%{expired_count: integer(), duration: integer()}` measurements.
+
+### Inspecting event age
+
+```elixir
+EventBus.fetch_event_metadata({:my_topic, "evt-1"})
+# => %{inserted_at: -576460751528736} (monotonic time, native units)
+```
 
 ## Debug mode
 

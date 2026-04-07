@@ -168,6 +168,18 @@ defmodule EventBus.Manager.Subscription do
     GenServer.call(__MODULE__, {:decrement_limit, subscriber, generation})
   end
 
+  @doc """
+  Batch version of `decrement_limit/2`. Processes all `{subscriber, generation}`
+  pairs in a single GenServer call. Unlimited subscribers (no entry in the
+  limits map) are skipped with a cheap `Map.get` — no per-subscriber overhead.
+  """
+  @spec decrement_limits([{subscriber(), non_neg_integer()}]) :: :ok
+  def decrement_limits([]), do: :ok
+
+  def decrement_limits(subscriber_generations) do
+    GenServer.call(__MODULE__, {:decrement_limits, subscriber_generations})
+  end
+
   ###########################################################################
   # DELEGATIONS
   ###########################################################################
@@ -249,6 +261,16 @@ defmodule EventBus.Manager.Subscription do
   @doc false
   def handle_call({:decrement_limit, subscriber, generation}, _from, state) do
     {:reply, :ok, maybe_decrement_limit(state, subscriber, generation)}
+  end
+
+  @doc false
+  def handle_call({:decrement_limits, subscriber_generations}, _from, state) do
+    state =
+      Enum.reduce(subscriber_generations, state, fn {subscriber, generation}, acc ->
+        maybe_decrement_limit(acc, subscriber, generation)
+      end)
+
+    {:reply, :ok, state}
   end
 
   defp normalize_opts!(opts) when is_list(opts) do

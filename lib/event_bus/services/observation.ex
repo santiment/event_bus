@@ -180,6 +180,105 @@ defmodule EventBus.Service.Observation do
     :ok
   end
 
+  @doc """
+  Force-expire a single event, cleaning up all observation, store, and snapshot
+  state. Decrements limited subscription counters for pending subscribers via a
+  single batch GenServer call.
+
+  Returns `{:ok, info}` with subscriber details, or `:not_found` if the event
+  was already cleaned up (e.g., by normal completion).
+  """
+  @spec force_expire(event_shadow()) ::
+          {:ok,
+           %{
+             subscribers: subscribers(),
+             completers: subscribers(),
+             skippers: subscribers()
+           }}
+          | :not_found
+  def force_expire({topic, id}) do
+    case :ets.lookup(@table, {topic, id}) do
+      [{{^topic, ^id}, subscribers, _}] ->
+        {completers, skippers} = collect_terminal(topic, id, subscribers)
+        pending = subscribers -- completers ++ skippers
+
+        # One GenServer call for all pending subscribers in this event.
+        batch_decrement_limits(pending, {topic, id})
+
+        Debug.log("expired topic=#{inspect(topic)} id=#{inspect(id)}")
+        Debug.clean_dispatch_metadata(topic, id)
+
+        :ets.delete(@table, {topic, id})
+        :ets.match_delete(@status_table, {{topic, id, :_}, :_})
+        :ets.delete(@snapshot_table, {topic, id})
+        StoreService.delete({topic, id})
+
+        {:ok, %{subscribers: subscribers, completers: completers, skippers: skippers}}
+
+      _ ->
+        :not_found
+    end
+  end
+
+  @doc """
+  Expire a batch of event shadows in a single pass.
+
+  For each event, collects pending subscribers that need limit decrements,
+  then makes ONE GenServer call for the entire batch. Events already cleaned
+  up by normal completion are skipped. Returns the number of events expired.
+  """
+  @spec expire_batch([event_shadow()]) :: non_neg_integer()
+  def expire_batch(event_shadows) do
+    # Phase 1: Read watcher entries and collect pending decrements.
+    {decrements, to_delete} =
+      Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow, {dec_acc, del_acc} ->
+        case :ets.lookup(@table, {topic, id}) do
+          [{{^topic, ^id}, subscribers, _}] ->
+            pending_decs = collect_pending_decrements(topic, id, subscribers)
+            {pending_decs ++ dec_acc, [shadow | del_acc]}
+
+          _ ->
+            # Already cleaned up by normal completion
+            {dec_acc, del_acc}
+        end
+      end)
+
+    # Phase 2: One GenServer call for ALL limit decrements across the batch.
+    SubscriptionManager.decrement_limits(decrements)
+
+    # Phase 3: Delete from all ETS tables.
+    Enum.each(to_delete, fn {topic, id} ->
+      :ets.delete(@table, {topic, id})
+      :ets.match_delete(@status_table, {{topic, id, :_}, :_})
+      :ets.delete(@snapshot_table, {topic, id})
+      Debug.clean_dispatch_metadata(topic, id)
+      StoreService.delete({topic, id})
+    end)
+
+    length(to_delete)
+  end
+
+  # Build [{subscriber, generation}, ...] for pending subscribers only.
+  @spec collect_pending_decrements(topic(), EventBus.event_id(), subscribers()) ::
+          [{EventBus.subscriber(), non_neg_integer()}]
+  defp collect_pending_decrements(topic, id, subscribers) do
+    Enum.flat_map(subscribers, fn sub ->
+      case :ets.lookup(@status_table, {topic, id, sub}) do
+        [{_, :pending}] -> [{sub, snapshot_generation({topic, id}, sub)}]
+        _ -> []
+      end
+    end)
+  end
+
+  defp batch_decrement_limits([], _event_shadow), do: :ok
+
+  defp batch_decrement_limits(pending, {topic, id}) do
+    subscriber_generations =
+      Enum.map(pending, fn sub -> {sub, snapshot_generation({topic, id}, sub)} end)
+
+    SubscriptionManager.decrement_limits(subscriber_generations)
+  end
+
   # Reconstruct completers/skippers lists from per-subscriber status entries.
   @spec collect_terminal(topic(), EventBus.event_id(), subscribers()) ::
           {subscribers(), subscribers()}

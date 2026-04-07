@@ -17,6 +17,14 @@ defmodule EventBus.Telemetry do
       * Metadata: `%{topic: atom(), event_id: term(), subscriber: term(),
                      kind: :error, reason: term(), stacktrace: list()}`
 
+    * `[:event_bus, :observation, :complete]` — when all subscribers finish and event is cleaned up
+      * Measurements: `%{subscriber_count: integer()}`
+      * Metadata: `%{topic: atom(), event_id: term(), completers: list(), skippers: list()}`
+
+    * `[:event_bus, :sweep, :cycle]` — after a sweep cycle that expired at least one event
+      * Measurements: `%{expired_count: integer(), duration: integer()}`
+      * Metadata: `%{}`
+
   If `:telemetry` is not available, all calls are no-ops.
   """
 

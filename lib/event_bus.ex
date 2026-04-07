@@ -336,6 +336,23 @@ defmodule EventBus do
     as: :fetch_data
 
   @doc """
+  Fetch an event's internal metadata.
+
+  Returns the bus-owned metadata map (e.g. `%{inserted_at: integer()}`) or `nil`
+  if the event is not in the store. Useful for inspecting event age.
+
+  ## Examples
+
+      EventBus.fetch_event_metadata({:hello_received, "123"})
+      %{inserted_at: -576460752303423488}
+
+  """
+  @spec fetch_event_metadata(event_shadow()) :: map() | nil
+  defdelegate fetch_event_metadata(event_shadow),
+    to: StoreService,
+    as: :fetch_metadata
+
+  @doc """
   Mark the event as completed for the subscriber.
 
   ## Examples
