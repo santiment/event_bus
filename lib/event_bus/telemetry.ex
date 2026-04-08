@@ -25,7 +25,7 @@ defmodule EventBus.Telemetry do
       * Measurements: `%{age: integer()}`
       * Metadata: `%{topic: atom(), event_id: term(), pending_subscribers: list()}`
 
-    * `[:event_bus, :sweep, :cycle]` — after a sweep cycle that expired at least one event
+    * `[:event_bus, :sweep, :cycle]` — after a sweep cycle that expired at least one event (not emitted for zero-expiration cycles)
       * Measurements: `%{expired_count: integer(), duration: integer()}`
       * Metadata: provided by the strategy's `telemetry_metadata/1` callback.
         `:bulk_smart` returns `%{expired_per_topic: %{atom() => integer()}}`.

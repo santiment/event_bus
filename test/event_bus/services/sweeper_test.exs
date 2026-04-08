@@ -336,25 +336,22 @@ defmodule EventBus.Service.SweeperTest do
       assert 0 == Sweeper.sweep(ttl_native(999_999_999))
     end
 
-    test "emits :cycle telemetry even when no events expire" do
+    test "does not emit :cycle telemetry when no events expire" do
       test_pid = self()
       handler_id = "bulk-cycle-empty-#{System.unique_integer()}"
 
       :telemetry.attach(
         handler_id,
         [:event_bus, :sweep, :cycle],
-        fn _name, measurements, metadata, _config ->
-          send(test_pid, {:cycle, measurements, metadata})
+        fn _name, _measurements, _metadata, _config ->
+          send(test_pid, :unexpected_cycle)
         end,
         nil
       )
 
       assert 0 == Sweeper.sweep(ttl_native(999_999_999))
 
-      assert_receive {:cycle, measurements, metadata}
-      assert measurements.expired_count == 0
-      assert is_integer(measurements.duration)
-      assert metadata.expired_per_topic == %{}
+      refute_receive :unexpected_cycle, 100
 
       :telemetry.detach(handler_id)
     end

@@ -421,12 +421,13 @@ Configuration:
 - `:event_ttl` — maximum event age in milliseconds. `nil` (default) disables the sweeper entirely. Typical values: `60_000` (1 min) for real-time systems, `300_000` (5 min) for general use, `900_000` (15 min) for batch workloads.
 - `:sweep_interval` — how often the sweeper runs, in milliseconds. Defaults to `10_000` (10 seconds).
 - `:sweep_strategy` — `:bulk_smart` (default), `:detailed`, or a module implementing `EventBus.SweepStrategy`. See below.
+- `:sweep_batch_size` — number of events per ETS cursor chunk. Defaults to `100`. Increase for high-throughput systems with large expiration backlogs.
 
 The sweeper never touches events that are still within their TTL, and it does not interfere with normal completion — if all subscribers finish before the TTL, the event is cleaned up immediately as usual.
 
 ### Sweep strategies
 
-**`:bulk_smart`** (default) — optimized for throughput. Events are expired in batches of 100 using ETS cursors, so memory stays constant. When no limited subscriptions (`subscribe_once`/`subscribe_n`) exist, the batch is pure ETS deletes with zero GenServer calls. When limited subscriptions are present, only those subscribers incur per-subscriber lookups, and all limit decrements are batched into a single GenServer call. Emits one `[:event_bus, :sweep, :cycle]` telemetry event per sweep with per-topic counts.
+**`:bulk_smart`** (default) — optimized for throughput. Events are expired in batches (default 100, configurable via `:sweep_batch_size`) using ETS cursors, so memory stays constant. When no limited subscriptions (`subscribe_once`/`subscribe_n`) exist, the batch is pure ETS deletes with zero GenServer calls. When limited subscriptions are present, only those subscribers incur per-subscriber lookups, and all limit decrements are batched into a single GenServer call. Emits one `[:event_bus, :sweep, :cycle]` telemetry event per sweep with per-topic counts.
 
 **`:detailed`** — each expired event is processed individually with full subscriber accounting and its own telemetry event. Useful when you need per-event expiration visibility (e.g., routing expired events to a dead letter topic or alerting on specific event IDs). Slower under high expiration volume.
 
@@ -448,9 +449,9 @@ See `EventBus.SweepStrategy` module docs for the callback interface and an examp
 
 ### Telemetry
 
-All strategies emit after each sweep cycle:
+All strategies emit when at least one event is expired:
 
-- `[:event_bus, :sweep, :cycle]` — measurements: `%{expired_count, duration}`, metadata provided by the strategy's `telemetry_metadata/1` callback. For `:bulk_smart` this includes `%{expired_per_topic: %{topic => count}}`.
+- `[:event_bus, :sweep, :cycle]` — measurements: `%{expired_count, duration}`, metadata provided by the strategy's `telemetry_metadata/1` callback. For `:bulk_smart` this includes `%{expired_per_topic: %{topic => count}}`. Not emitted for zero-expiration cycles.
 
 The `:detailed` strategy additionally emits per expired event:
 

@@ -7,7 +7,7 @@ defmodule EventBus.Service.Sweeper do
   alias EventBus.Telemetry
 
   @default_sweep_interval 10_000
-  @batch_size 100
+  @default_batch_size 100
 
   @doc false
   def start_link(opts \\ []) do
@@ -16,18 +16,25 @@ defmodule EventBus.Service.Sweeper do
 
   @doc false
   def init(_opts) do
-    ttl_ms = Application.fetch_env!(:event_bus, :event_ttl)
+    ttl_ms = Application.get_env(:event_bus, :event_ttl)
+
+    unless is_integer(ttl_ms) and ttl_ms > 0 do
+      raise ArgumentError,
+            "EventBus.Service.Sweeper requires :event_ttl to be a positive integer (milliseconds), got: #{inspect(ttl_ms)}"
+    end
+
     interval = Application.get_env(:event_bus, :sweep_interval, @default_sweep_interval)
+    batch_size = Application.get_env(:event_bus, :sweep_batch_size, @default_batch_size)
     strategy = resolve_strategy(Application.get_env(:event_bus, :sweep_strategy, :bulk_smart))
     ttl_native = System.convert_time_unit(ttl_ms, :millisecond, :native)
 
     schedule_sweep(interval)
-    {:ok, %{ttl_native: ttl_native, interval: interval, strategy: strategy}}
+    {:ok, %{ttl_native: ttl_native, interval: interval, batch_size: batch_size, strategy: strategy}}
   end
 
   @doc false
   def handle_info(:sweep, state) do
-    do_sweep(state.ttl_native, state.strategy)
+    do_sweep(state.ttl_native, state.batch_size, state.strategy)
     schedule_sweep(state.interval)
     {:noreply, state}
   end
@@ -41,6 +48,9 @@ defmodule EventBus.Service.Sweeper do
       or a shorthand atom (`:bulk_smart`, `:detailed`). Defaults to the
       application-level `:sweep_strategy` config, which defaults to `:bulk_smart`.
 
+    * `:batch_size` — number of events per cursor chunk. Defaults to the
+      application-level `:sweep_batch_size` config, which defaults to `100`.
+
   Returns the number of expired events cleaned up.
   """
   @spec sweep(integer(), keyword()) :: non_neg_integer()
@@ -51,31 +61,38 @@ defmodule EventBus.Service.Sweeper do
       end)
       |> resolve_strategy()
 
-    do_sweep(ttl_native, strategy)
+    batch_size =
+      Keyword.get_lazy(opts, :batch_size, fn ->
+        Application.get_env(:event_bus, :sweep_batch_size, @default_batch_size)
+      end)
+
+    do_sweep(ttl_native, batch_size, strategy)
   end
 
   defp schedule_sweep(interval) do
     Process.send_after(self(), :sweep, interval)
   end
 
-  defp do_sweep(ttl_native, strategy) do
+  defp do_sweep(ttl_native, batch_size, strategy) do
     start_time = System.monotonic_time()
     cutoff = start_time - ttl_native
 
     state = strategy.init()
 
     {expired_count, final_state} =
-      StoreService.select_expired(cutoff, @batch_size)
+      StoreService.select_expired(cutoff, batch_size)
       |> expire_in_batches(strategy, state, 0)
 
-    duration = System.monotonic_time() - start_time
-    metadata = strategy.telemetry_metadata(final_state)
+    if expired_count > 0 do
+      duration = System.monotonic_time() - start_time
+      metadata = strategy.telemetry_metadata(final_state)
 
-    Telemetry.execute(
-      [:event_bus, :sweep, :cycle],
-      %{expired_count: expired_count, duration: duration},
-      metadata
-    )
+      Telemetry.execute(
+        [:event_bus, :sweep, :cycle],
+        %{expired_count: expired_count, duration: duration},
+        metadata
+      )
+    end
 
     expired_count
   end

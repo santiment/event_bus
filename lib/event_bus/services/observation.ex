@@ -196,6 +196,11 @@ defmodule EventBus.Service.Observation do
              skippers: subscribers()
            }}
           | :not_found
+  # Note: not fully atomic — between the lookup and the delete, on_complete
+  # could fire concurrently if another process completes the last subscriber.
+  # This can cause benign double-deletes (ETS delete on missing key is a no-op)
+  # and a redundant batch_decrement_limits call (generation check makes it safe).
+  # Acceptable because the sweeper runs infrequently relative to event throughput.
   def force_expire({topic, id}) do
     case :ets.lookup(@table, {topic, id}) do
       [{{^topic, ^id}, subscribers, _}] ->
@@ -251,6 +256,10 @@ defmodule EventBus.Service.Observation do
 
   defp collect_batch(event_shadows, limited_set) do
     if MapSet.size(limited_set) == 0 do
+      # Fast path: pure ETS operations, no GenServer calls.
+      # The member check and later delete are not atomic — on_complete could
+      # clean the entry in between — but the resulting overcount in the
+      # returned total is benign (deletes on missing keys are no-ops).
       to_delete =
         Enum.filter(event_shadows, fn {topic, id} ->
           :ets.member(@table, {topic, id})
