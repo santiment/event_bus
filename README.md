@@ -445,7 +445,7 @@ config :event_bus,
   sweep_strategy: MyApp.CustomSweepStrategy
 ```
 
-See `EventBus.SweepStrategy` module docs for the callback interface and an example.
+See [`CUSTOM_SWEEPERS.md`](CUSTOM_SWEEPERS.md) for a full guide on writing custom strategies, including runtime architecture, cleanup invariants, and a complete example.
 
 ### Telemetry
 
@@ -494,32 +494,11 @@ Subscriber durations are measured from dispatch until the subscriber reaches a t
 
 ## Storage model
 
-EventBus uses ETS tables shared across all topics:
-
-| Table | Purpose |
-| --- | --- |
-| `:eb_event_store` | Stores event structs keyed by `{topic, id}` |
-| `:eb_event_watchers` | Tracks subscriber lists and remaining count per event |
-| `:eb_event_watcher_status` | Tracks per-subscriber terminal state |
-| `:eb_event_subscription_generations` | Stores the subscription generation snapshot per event |
-| `:eb_topics` | Stores registered topic names |
-| `:eb_subscribers` | Stores subscriber-to-pattern mappings |
-| `:eb_topic_subscribers` | Stores the precomputed topic-to-subscriber index |
-| `:eb_subscription_opts` | Stores priority, guard, and generation per subscriber |
-
-When every subscriber for an event reaches a terminal state, the event store entry and observation state are cleaned up automatically.
-
-To inspect in-flight events manually:
-
-```elixir
-:ets.tab2list(:eb_event_watchers)
-> [{{topic, id}, subscribers, pending_count}, ...]
-
-:ets.lookup(:eb_event_watcher_status, {topic, id, subscriber})
-> [{{topic, id, subscriber}, :pending}]
-```
+EventBus uses ETS tables shared across all topics. When every subscriber for an event reaches a terminal state (`mark_as_completed` or `mark_as_skipped`), the event and its observation state are cleaned up automatically.
 
 ETS is not durable storage. If you need persistence, subscribe a consumer to `[".*"]` and write the fetched events to your database or message archive.
+
+For details on the internal table layout — including table names, GenServer responsibilities, and cleanup invariants — see [`CUSTOM_SWEEPERS.md`](CUSTOM_SWEEPERS.md).
 
 ## Documentation and ecosystem
 

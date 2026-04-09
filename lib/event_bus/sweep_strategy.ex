@@ -13,8 +13,12 @@ defmodule EventBus.SweepStrategy do
 
   ## Custom strategies
 
-  Implement this behaviour to define your own strategy (e.g., routing expired
-  events to a dead letter topic before deletion):
+  Implement this behaviour to define your own strategy. Use
+  `EventBus.SweepRuntime` for expiration — it handles limited-subscription
+  accounting internally so your strategy does not need to interact with
+  internal modules.
+
+  Example (routing expired events to a dead letter topic before deletion):
 
       defmodule MyApp.DeadLetterSweep do
         @behaviour EventBus.SweepStrategy
@@ -24,15 +28,13 @@ defmodule EventBus.SweepStrategy do
 
         @impl true
         def handle_batch(batch, state) do
-          event_shadows = Enum.map(batch, fn {topic, id, _inserted_at} -> {topic, id} end)
-
-          Enum.each(event_shadows, fn {topic, id} ->
+          Enum.each(batch, fn {topic, id, _inserted_at} ->
             event = EventBus.fetch_event({topic, id})
             if event, do: MyApp.DeadLetter.store(event)
           end)
 
-          limited = EventBus.Manager.Subscription.limited_subscribers()
-          {count, _topics} = EventBus.Service.Observation.expire_batch(event_shadows, limited)
+          event_shadows = Enum.map(batch, fn {topic, id, _inserted_at} -> {topic, id} end)
+          %{expired_count: count} = EventBus.SweepRuntime.expire_batch(event_shadows)
           {count, %{state | dead_lettered: state.dead_lettered + count}}
         end
 
@@ -48,6 +50,7 @@ defmodule EventBus.SweepStrategy do
         event_ttl: 300_000,
         sweep_strategy: MyApp.DeadLetterSweep
 
+  See `CUSTOM_SWEEPERS.md` for a full guide on writing custom strategies.
   """
 
   @typedoc "A single entry from the expired-event cursor scan."

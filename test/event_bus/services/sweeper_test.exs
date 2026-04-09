@@ -602,10 +602,79 @@ defmodule EventBus.Service.SweeperTest do
   end
 
   # ---------------------------------------------------------------------------
+  # SweepRuntime public API
+  # ---------------------------------------------------------------------------
+
+  describe "SweepRuntime.expire_event/1" do
+    test "expires an event and returns subscriber details" do
+      sub = {SRExpireSub, nil}
+      create_event("sre1")
+      setup_observation(@topic, "sre1", [sub])
+
+      assert {:ok, info} = EventBus.SweepRuntime.expire_event({@topic, "sre1"})
+      assert sub in info.subscribers
+      assert [] == :ets.lookup(Store.table_name(), {@topic, "sre1"})
+    end
+
+    test "returns :not_found for already-cleaned events" do
+      assert :not_found == EventBus.SweepRuntime.expire_event({@topic, "nonexistent"})
+    end
+  end
+
+  describe "SweepRuntime.expire_batch/1" do
+    test "expires events and returns map with count and topic breakdown" do
+      sub = {SRBatchSub, nil}
+
+      for i <- 1..3 do
+        create_event("srb#{i}")
+        setup_observation(@topic, "srb#{i}", [sub])
+      end
+
+      shadows = Enum.map(1..3, fn i -> {@topic, "srb#{i}"} end)
+      result = EventBus.SweepRuntime.expire_batch(shadows)
+
+      assert %{expired_count: 3, expired_per_topic: %{@topic => 3}} = result
+
+      for i <- 1..3 do
+        assert [] == :ets.lookup(Store.table_name(), {@topic, "srb#{i}"})
+      end
+    end
+
+    test "returns zero counts for empty list" do
+      assert %{expired_count: 0, expired_per_topic: %{}} ==
+               EventBus.SweepRuntime.expire_batch([])
+    end
+
+    test "handles limited subscribers correctly" do
+      topic = :sr_batch_limit_test
+      EventBus.register_topic(topic)
+
+      defmodule SRBatchLimitSub do
+        def process({_topic, _id}), do: :ok
+      end
+
+      EventBus.subscribe_n({{SRBatchLimitSub, nil}, ["sr_batch_limit_test"]}, 5)
+
+      EventBus.notify_sync(%Event{id: "srbl1", topic: topic, data: %{}})
+
+      result = EventBus.SweepRuntime.expire_batch([{topic, "srbl1"}])
+      assert result.expired_count == 1
+
+      # Subscriber should still work after expiry
+      EventBus.notify_sync(%Event{id: "srbl2", topic: topic, data: %{}})
+      assert {[{SRBatchLimitSub, nil}], _, _} = Observation.fetch({topic, "srbl2"})
+
+      Observation.force_expire({topic, "srbl2"})
+      EventBus.unsubscribe({SRBatchLimitSub, nil})
+      EventBus.unregister_topic(topic)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Custom strategy
   # ---------------------------------------------------------------------------
 
-  describe "custom strategy" do
+  describe "custom strategy (internal modules)" do
     defmodule CountingStrategy do
       @behaviour EventBus.SweepStrategy
 
@@ -658,6 +727,97 @@ defmodule EventBus.Service.SweeperTest do
       assert length(metadata.expired_ids) == 2
 
       :telemetry.detach(handler_id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Custom strategy using only public APIs
+  # ---------------------------------------------------------------------------
+
+  describe "custom strategy (public API only)" do
+    defmodule PublicAPIStrategy do
+      @moduledoc """
+      A custom strategy that uses only the public API:
+      - EventBus.SweepStrategy (behaviour)
+      - EventBus.SweepRuntime (expire helpers)
+      - EventBus.fetch_event/1 (read event before expiration)
+      """
+      @behaviour EventBus.SweepStrategy
+
+      @impl true
+      def init, do: %{captured: []}
+
+      @impl true
+      def handle_batch(batch, state) do
+        # Capture event data before expiration (dead letter pattern)
+        captured =
+          Enum.flat_map(batch, fn {topic, id, _inserted_at} ->
+            case EventBus.fetch_event({topic, id}) do
+              nil -> []
+              event -> [%{topic: topic, id: id, data: event.data}]
+            end
+          end)
+
+        event_shadows = Enum.map(batch, fn {topic, id, _inserted_at} -> {topic, id} end)
+        %{expired_count: count} = EventBus.SweepRuntime.expire_batch(event_shadows)
+        {count, %{state | captured: state.captured ++ captured}}
+      end
+
+      @impl true
+      def telemetry_metadata(state) do
+        %{captured_count: length(state.captured)}
+      end
+    end
+
+    test "works end-to-end using only public APIs" do
+      test_pid = self()
+      handler_id = "public-api-strategy-#{System.unique_integer()}"
+
+      :telemetry.attach(
+        handler_id,
+        [:event_bus, :sweep, :cycle],
+        fn _name, measurements, metadata, _config ->
+          send(test_pid, {:cycle, measurements, metadata})
+        end,
+        nil
+      )
+
+      sub = {PublicAPISub, nil}
+      create_event("pa1", @topic, 2_000)
+      create_event("pa2", @topic, 2_000)
+      setup_observation(@topic, "pa1", [sub])
+      setup_observation(@topic, "pa2", [sub])
+
+      assert 2 == Sweeper.sweep(ttl_native(500), strategy: PublicAPIStrategy)
+
+      assert_receive {:cycle, measurements, metadata}
+      assert measurements.expired_count == 2
+      assert metadata.captured_count == 2
+
+      :telemetry.detach(handler_id)
+    end
+
+    test "handles limited subscribers via public API" do
+      topic = :public_api_limit_test
+      EventBus.register_topic(topic)
+
+      defmodule PublicAPILimitSub do
+        def process({_topic, _id}), do: :ok
+      end
+
+      EventBus.subscribe_n({{PublicAPILimitSub, nil}, ["public_api_limit_test"]}, 3)
+
+      EventBus.notify_sync(%Event{id: "pal1", topic: topic, data: %{}})
+
+      Sweeper.sweep(ttl_native(0), strategy: PublicAPIStrategy)
+
+      # Subscriber should still work after expiry of one event
+      EventBus.notify_sync(%Event{id: "pal2", topic: topic, data: %{}})
+      assert {[{PublicAPILimitSub, nil}], _, _} = Observation.fetch({topic, "pal2"})
+
+      Observation.force_expire({topic, "pal2"})
+      EventBus.unsubscribe({PublicAPILimitSub, nil})
+      EventBus.unregister_topic(topic)
     end
   end
 
