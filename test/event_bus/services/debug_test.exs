@@ -99,15 +99,20 @@ defmodule EventBus.Service.DebugTest do
     assert logs =~ "[EventBus] notify topic=:debug_test_topic id=\"debug-on-1\""
 
     # Dispatch log
-    assert logs =~ "[EventBus] dispatch topic=:debug_test_topic id=\"debug-on-1\""
+    assert logs =~
+             "[EventBus] dispatch topic=:debug_test_topic id=\"debug-on-1\""
+
     assert logs =~ "CompletingSubscriber"
 
     # Completed log with duration
-    assert logs =~ "[EventBus] completed topic=:debug_test_topic id=\"debug-on-1\""
+    assert logs =~
+             "[EventBus] completed topic=:debug_test_topic id=\"debug-on-1\""
+
     assert logs =~ "duration="
 
     # Cleaned log
-    assert logs =~ "[EventBus] cleaned topic=:debug_test_topic id=\"debug-on-1\""
+    assert logs =~
+             "[EventBus] cleaned topic=:debug_test_topic id=\"debug-on-1\""
   end
 
   test "logs subscribe and unsubscribe" do
@@ -170,7 +175,9 @@ defmodule EventBus.Service.DebugTest do
         Process.sleep(100)
       end)
 
-    assert logs =~ "[EventBus] skipped topic=:debug_test_topic id=\"debug-crash-1\""
+    assert logs =~
+             "[EventBus] skipped topic=:debug_test_topic id=\"debug-crash-1\""
+
     assert logs =~ "CrashingSubscriber"
   end
 
@@ -195,7 +202,9 @@ defmodule EventBus.Service.DebugTest do
   end
 
   test "works with configured subscribers" do
-    EventBus.subscribe({{ConfigSubscriber, %{key: "val"}}, ["debug_test_topic"]})
+    EventBus.subscribe(
+      {{ConfigSubscriber, %{key: "val"}}, ["debug_test_topic"]}
+    )
 
     event = %Event{
       id: "debug-config-1",
@@ -213,5 +222,67 @@ defmodule EventBus.Service.DebugTest do
     assert logs =~ "[EventBus] dispatch"
     assert logs =~ "ConfigSubscriber"
     assert logs =~ "[EventBus] completed"
+  end
+
+  test "log_terminal without prior dispatch metadata logs without duration" do
+    Debug.toggle(true)
+
+    logs =
+      capture_log([level: :debug], fn ->
+        Debug.log_terminal(
+          "completed",
+          {SomeModule, nil},
+          @topic,
+          "no-dispatch-1"
+        )
+      end)
+
+    assert logs =~ "[EventBus] completed"
+    assert logs =~ "no-dispatch-1"
+    refute logs =~ "duration="
+  end
+
+  test "log_terminal formats duration in milliseconds" do
+    Debug.toggle(true)
+
+    # Record dispatch with a start time ~50ms ago
+    sub = {MsDurationSub, nil}
+
+    :ets.insert(
+      :eb_dispatch_metadata,
+      {{sub, @topic, "ms-1"},
+       System.monotonic_time() -
+         System.convert_time_unit(50_000, :microsecond, :native)}
+    )
+
+    logs =
+      capture_log([level: :debug], fn ->
+        Debug.log_terminal("completed", sub, @topic, "ms-1")
+      end)
+
+    assert logs =~ "duration="
+    assert logs =~ "ms"
+  end
+
+  test "log_terminal formats duration in seconds" do
+    Debug.toggle(true)
+
+    # Record dispatch with a start time ~1.5s ago
+    sub = {SecDurationSub, nil}
+
+    :ets.insert(
+      :eb_dispatch_metadata,
+      {{sub, @topic, "sec-1"},
+       System.monotonic_time() -
+         System.convert_time_unit(1_500_000, :microsecond, :native)}
+    )
+
+    logs =
+      capture_log([level: :debug], fn ->
+        Debug.log_terminal("completed", sub, @topic, "sec-1")
+      end)
+
+    assert logs =~ "duration="
+    assert logs =~ "s"
   end
 end

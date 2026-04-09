@@ -8,18 +8,6 @@ defmodule EventBus.Service.StoreTest do
 
   doctest Store
 
-  setup do
-    :ok
-  end
-
-  test "consolidated table exists" do
-    assert :ets.info(Store.table_name()) != :undefined
-  end
-
-  test "register_topic is a no-op" do
-    assert :ok == Store.register_topic(:store_test_topic)
-  end
-
   test "unregister_topic deletes entries for the topic" do
     topic = :store_unregister_test
 
@@ -142,5 +130,67 @@ defmodule EventBus.Service.StoreTest do
     capture_log(fn ->
       assert is_nil(Store.fetch({topic, event.id}))
     end)
+  end
+
+  test "fetch handles legacy entries without metadata" do
+    topic = :legacy_format_test
+
+    event = %Event{
+      id: "LEG1",
+      transaction_id: "T1",
+      data: "legacy",
+      topic: topic
+    }
+
+    # Insert in the old 2-element format (no metadata)
+    :ets.insert(Store.table_name(), {{topic, "LEG1"}, event})
+
+    assert event == Store.fetch({topic, "LEG1"})
+
+    :ets.delete(Store.table_name(), {topic, "LEG1"})
+  end
+
+  test "fetch logs at info level when event is missing" do
+    prev_level = Logger.level()
+    Logger.configure(level: :info)
+
+    log =
+      capture_log([level: :info], fn ->
+        assert is_nil(Store.fetch({:no_such_topic, "no_such_id"}))
+      end)
+
+    Logger.configure(level: prev_level)
+
+    assert log =~ "[EVENTBUS][STORE]"
+    assert log =~ "ets_fetch_error"
+  end
+
+  test "find_expired returns expired events as {shadow, inserted_at} pairs" do
+    topic = :find_expired_test
+    EventBus.register_topic(topic)
+
+    event = %Event{id: "FE1", topic: topic, data: "test"}
+
+    inserted_at =
+      System.monotonic_time() -
+        System.convert_time_unit(5_000, :millisecond, :native)
+
+    :ets.insert(
+      Store.table_name(),
+      {{topic, "FE1"}, event, %{inserted_at: inserted_at}}
+    )
+
+    cutoff =
+      System.monotonic_time() -
+        System.convert_time_unit(1_000, :millisecond, :native)
+
+    results = Store.find_expired(cutoff)
+
+    assert Enum.any?(results, fn {{t, id}, _ts} ->
+             t == topic and id == "FE1"
+           end)
+
+    Store.delete({topic, "FE1"})
+    EventBus.unregister_topic(topic)
   end
 end

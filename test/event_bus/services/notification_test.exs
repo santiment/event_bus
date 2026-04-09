@@ -26,13 +26,20 @@ defmodule EventBus.Service.NotificationTest do
     source: "NotificationTest"
   }
 
+  @config_topics Application.compile_env(:event_bus, :topics, [])
+
   setup do
-    for topic <- EventBus.topics() do
+    for topic <- EventBus.topics() -- @config_topics do
       EventBus.unregister_topic(topic)
     end
 
     for {subscriber, _} <- EventBus.subscribers() do
       EventBus.unsubscribe(subscriber)
+    end
+
+    # Re-register config topics in case a prior test removed them
+    for topic <- @config_topics do
+      EventBus.register_topic(topic)
     end
 
     :ok
@@ -93,5 +100,22 @@ defmodule EventBus.Service.NotificationTest do
              logs,
              "Topic :metrics_received doesn't have subscribers"
            )
+  end
+
+  test "notify for unregistered topic warns differently" do
+    event = %Event{
+      id: "E2",
+      topic: :completely_unknown_topic,
+      data: %{test: true}
+    }
+
+    logs =
+      capture_log(fn ->
+        Notification.notify(event)
+        Process.sleep(100)
+      end)
+
+    assert logs =~ "completely_unknown_topic"
+    assert logs =~ "is not registered and has no subscribers"
   end
 end

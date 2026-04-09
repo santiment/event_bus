@@ -135,8 +135,11 @@ defmodule EventBus.Service.GuardTest do
       notify_and_wait("guard-raise-continue-1")
     end)
 
-    refute_received {:processed, PassingSubscriber, @topic, "guard-raise-continue-1"}
-    assert_received {:processed, AnotherSubscriber, @topic, "guard-raise-continue-1"}
+    refute_received {:processed, PassingSubscriber, @topic,
+                     "guard-raise-continue-1"}
+
+    assert_received {:processed, AnotherSubscriber, @topic,
+                     "guard-raise-continue-1"}
   end
 
   test "subscriber without guard is unaffected" do

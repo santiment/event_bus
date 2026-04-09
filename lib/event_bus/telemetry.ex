@@ -17,6 +17,20 @@ defmodule EventBus.Telemetry do
       * Metadata: `%{topic: atom(), event_id: term(), subscriber: term(),
                      kind: :error, reason: term(), stacktrace: list()}`
 
+    * `[:event_bus, :observation, :complete]` — when all subscribers finish and event is cleaned up
+      * Measurements: `%{subscriber_count: integer()}`
+      * Metadata: `%{topic: atom(), event_id: term(), completers: list(), skippers: list()}`
+
+    * `[:event_bus, :sweep, :expired]` — per expired event (`:detailed` strategy only)
+      * Measurements: `%{age: integer()}`
+      * Metadata: `%{topic: atom(), event_id: term(), pending_subscribers: list()}`
+
+    * `[:event_bus, :sweep, :cycle]` — after a sweep cycle that expired at least one event (not emitted for zero-expiration cycles)
+      * Measurements: `%{expired_count: integer(), duration: integer()}`
+      * Metadata: provided by the strategy's `telemetry_metadata/1` callback.
+        `:bulk_smart` returns `%{expired_per_topic: %{atom() => integer()}}`.
+        `:detailed` returns `%{}`.
+
   If `:telemetry` is not available, all calls are no-ops.
   """
 

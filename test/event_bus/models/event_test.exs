@@ -37,4 +37,9 @@ defmodule EventBus.Model.EventTest do
 
     assert Event.duration(event) == 0
   end
+
+  test "CancelEvent.message/1 returns formatted reason" do
+    error = %EventBus.CancelEvent{reason: "unauthorized"}
+    assert Exception.message(error) == "event cancelled: \"unauthorized\""
+  end
 end

@@ -160,10 +160,14 @@ defmodule EventBus.Service.SubscribeOnceTest do
     Process.register(self(), :subscribe_once_test)
     config = %{key: "val"}
 
-    EventBus.subscribe_once({{ConfigOnceSubscriber, config}, ["subscribe_once_topic"]})
+    EventBus.subscribe_once(
+      {{ConfigOnceSubscriber, config}, ["subscribe_once_topic"]}
+    )
 
     notify_and_wait("config-1")
-    assert_received {:processed, {ConfigOnceSubscriber, ^config}, @topic, "config-1"}
+
+    assert_received {:processed, {ConfigOnceSubscriber, ^config}, @topic,
+                     "config-1"}
 
     Process.sleep(100)
     assert [] == EventBus.subscribers()
@@ -198,7 +202,9 @@ defmodule EventBus.Service.SubscribeOnceTest do
     # state. The old completion must not spend the new subscription's limit.
     Application.put_env(:event_bus, :subscribe_once_test_pid, self())
 
-    EventBus.subscribe_once({DelayedCompletionSubscriber, ["subscribe_once_topic"]})
+    EventBus.subscribe_once(
+      {DelayedCompletionSubscriber, ["subscribe_once_topic"]}
+    )
 
     old_event = %Event{id: "old-event", topic: @topic, data: %{}}
     EventBus.Service.Notification.notify(old_event)
@@ -214,18 +220,23 @@ defmodule EventBus.Service.SubscribeOnceTest do
           pid
       end
 
-    EventBus.subscribe_once({DelayedCompletionSubscriber, ["subscribe_once_topic"]})
+    EventBus.subscribe_once(
+      {DelayedCompletionSubscriber, ["subscribe_once_topic"]}
+    )
 
     send(waiter, :complete)
     Process.sleep(100)
 
-    assert [{{DelayedCompletionSubscriber, nil}, _patterns}] = EventBus.subscribers()
+    assert [{{DelayedCompletionSubscriber, nil}, _patterns}] =
+             EventBus.subscribers()
   end
 
   test "subscribe_once does not overdeliver while a prior event is still in flight" do
     Application.put_env(:event_bus, :subscribe_once_test_pid, self())
 
-    EventBus.subscribe_once({DelayedCompletionSubscriber, ["subscribe_once_topic"]})
+    EventBus.subscribe_once(
+      {DelayedCompletionSubscriber, ["subscribe_once_topic"]}
+    )
 
     first_event = %Event{id: "in-flight-1", topic: @topic, data: %{}}
     second_event = %Event{id: "in-flight-2", topic: @topic, data: %{}}

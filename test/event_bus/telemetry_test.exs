@@ -73,12 +73,16 @@ defmodule EventBus.TelemetryTest do
 
       Notification.notify(event)
 
-      assert_receive {:telemetry, [:event_bus, :notify, :start], start_measurements, start_metadata}
+      assert_receive {:telemetry, [:event_bus, :notify, :start],
+                      start_measurements, start_metadata}
+
       assert is_integer(start_measurements.system_time)
       assert start_metadata.topic == @topic
       assert start_metadata.event_id == "telemetry-start-stop"
 
-      assert_receive {:telemetry, [:event_bus, :notify, :stop], stop_measurements, stop_metadata}
+      assert_receive {:telemetry, [:event_bus, :notify, :stop],
+                      stop_measurements, stop_metadata}
+
       assert is_integer(stop_measurements.duration)
       assert stop_measurements.duration >= 0
       assert stop_metadata.topic == @topic
@@ -88,7 +92,9 @@ defmodule EventBus.TelemetryTest do
   end
 
   describe "telemetry events on subscriber exception" do
-    test "emits :exception event with duration and error details", %{test_pid: test_pid} do
+    test "emits :exception event with duration and error details", %{
+      test_pid: test_pid
+    } do
       capture_log(fn ->
         :telemetry.attach(
           "telemetry-test-exception",
@@ -112,7 +118,9 @@ defmodule EventBus.TelemetryTest do
         Notification.notify(event)
       end)
 
-      assert_receive {:telemetry, [:event_bus, :notify, :exception], measurements, metadata}
+      assert_receive {:telemetry, [:event_bus, :notify, :exception],
+                      measurements, metadata}
+
       assert is_integer(measurements.duration)
       assert measurements.duration >= 0
       assert metadata.topic == @topic
@@ -125,7 +133,9 @@ defmodule EventBus.TelemetryTest do
   end
 
   describe "no telemetry events when no subscribers" do
-    test "does not emit :start/:stop when topic has no subscribers", %{test_pid: test_pid} do
+    test "does not emit :start/:stop when topic has no subscribers", %{
+      test_pid: test_pid
+    } do
       capture_log(fn ->
         :telemetry.attach(
           "telemetry-test-start",

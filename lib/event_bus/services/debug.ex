@@ -46,7 +46,10 @@ defmodule EventBus.Service.Debug do
   @spec record_dispatch(term(), atom(), term()) :: :ok
   def record_dispatch(subscriber, topic, id) do
     if enabled?() do
-      :ets.insert(@dispatch_table, {{subscriber, topic, id}, System.monotonic_time()})
+      :ets.insert(
+        @dispatch_table,
+        {{subscriber, topic, id}, System.monotonic_time()}
+      )
     end
 
     :ok
@@ -76,6 +79,20 @@ defmodule EventBus.Service.Debug do
   end
 
   @doc false
+  @spec batch_clean_dispatch_metadata([{atom(), term()}]) :: :ok
+  def batch_clean_dispatch_metadata([]), do: :ok
+
+  def batch_clean_dispatch_metadata(event_shadows) do
+    match_spec =
+      Enum.map(event_shadows, fn {topic, id} ->
+        {{{:_, topic, id}, :_}, [], [true]}
+      end)
+
+    :ets.select_delete(@dispatch_table, match_spec)
+    :ok
+  end
+
+  @doc false
   @spec log(String.t()) :: :ok
   def log(message) do
     if enabled?() do
@@ -92,11 +109,12 @@ defmodule EventBus.Service.Debug do
       duration_str =
         case fetch_and_clear_dispatch_time(subscriber, topic, id) do
           {:ok, start_time} ->
-            duration_us = System.convert_time_unit(
-              System.monotonic_time() - start_time,
-              :native,
-              :microsecond
-            )
+            duration_us =
+              System.convert_time_unit(
+                System.monotonic_time() - start_time,
+                :native,
+                :microsecond
+              )
 
             " duration=#{format_duration(duration_us)}"
 
