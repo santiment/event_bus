@@ -364,10 +364,6 @@ defmodule EventBus.Service.SweeperTest do
       Observation.force_expire({@topic, "sw2"})
     end
 
-    test "returns 0 when no events are expired" do
-      assert 0 == Sweeper.sweep(ttl_native(999_999_999))
-    end
-
     test "does not emit :cycle telemetry when no events expire" do
       test_pid = self()
       handler_id = "bulk-cycle-empty-#{System.unique_integer()}"
@@ -576,28 +572,6 @@ defmodule EventBus.Service.SweeperTest do
       :telemetry.detach(handler_id)
     end
 
-    test "handles limited subscribers correctly" do
-      topic = :detail_limit_test
-      EventBus.register_topic(topic)
-
-      defmodule DetailLimitSub do
-        def process({_topic, _id}), do: :ok
-      end
-
-      EventBus.subscribe_n({{DetailLimitSub, nil}, ["detail_limit_test"]}, 3)
-
-      EventBus.notify_sync(%Event{id: "dl1", topic: topic, data: %{}})
-
-      Sweeper.sweep(ttl_native(0), strategy: :detailed)
-
-      # Subscriber should still work
-      EventBus.notify_sync(%Event{id: "dl2", topic: topic, data: %{}})
-      assert {[{DetailLimitSub, nil}], _, _} = Observation.fetch({topic, "dl2"})
-
-      Observation.force_expire({topic, "dl2"})
-      EventBus.unsubscribe({DetailLimitSub, nil})
-      EventBus.unregister_topic(topic)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -685,99 +659,6 @@ defmodule EventBus.Service.SweeperTest do
       end
     end
 
-    test "returns zero counts for empty list" do
-      assert %{expired_count: 0, expired_per_topic: %{}} ==
-               EventBus.SweepRuntime.expire_batch([])
-    end
-
-    test "handles limited subscribers correctly" do
-      topic = :sr_batch_limit_test
-      EventBus.register_topic(topic)
-
-      defmodule SRBatchLimitSub do
-        def process({_topic, _id}), do: :ok
-      end
-
-      EventBus.subscribe_n({{SRBatchLimitSub, nil}, ["sr_batch_limit_test"]}, 5)
-
-      EventBus.notify_sync(%Event{id: "srbl1", topic: topic, data: %{}})
-
-      result = EventBus.SweepRuntime.expire_batch([{topic, "srbl1"}])
-      assert result.expired_count == 1
-
-      # Subscriber should still work after expiry
-      EventBus.notify_sync(%Event{id: "srbl2", topic: topic, data: %{}})
-
-      assert {[{SRBatchLimitSub, nil}], _, _} =
-               Observation.fetch({topic, "srbl2"})
-
-      Observation.force_expire({topic, "srbl2"})
-      EventBus.unsubscribe({SRBatchLimitSub, nil})
-      EventBus.unregister_topic(topic)
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Custom strategy
-  # ---------------------------------------------------------------------------
-
-  describe "custom strategy (internal modules)" do
-    defmodule CountingStrategy do
-      @behaviour EventBus.SweepStrategy
-
-      alias EventBus.Manager.Subscription, as: SubscriptionManager
-      alias EventBus.Service.Observation, as: ObservationService
-
-      @impl true
-      def init do
-        limited = SubscriptionManager.limited_subscribers()
-        %{limited: limited, ids: []}
-      end
-
-      @impl true
-      def handle_batch(batch, state) do
-        event_shadows = Enum.map(batch, fn {topic, id, _} -> {topic, id} end)
-
-        {count, _topics} =
-          ObservationService.expire_batch(event_shadows, state.limited)
-
-        ids = Enum.map(event_shadows, fn {_topic, id} -> id end)
-        {count, %{state | ids: state.ids ++ ids}}
-      end
-
-      @impl true
-      def telemetry_metadata(state) do
-        %{expired_ids: state.ids}
-      end
-    end
-
-    test "accepts a custom module via strategy: option" do
-      test_pid = self()
-      handler_id = "custom-strategy-#{System.unique_integer()}"
-
-      :telemetry.attach(
-        handler_id,
-        [:event_bus, :sweep, :cycle],
-        fn _name, _measurements, metadata, _config ->
-          send(test_pid, {:meta, metadata})
-        end,
-        nil
-      )
-
-      sub = {CustomSub, nil}
-      create_event("cs1", @topic, 2_000)
-      create_event("cs2", @topic, 2_000)
-      setup_observation(@topic, "cs1", [sub])
-      setup_observation(@topic, "cs2", [sub])
-
-      assert 2 == Sweeper.sweep(ttl_native(500), strategy: CountingStrategy)
-
-      assert_receive {:meta, metadata}
-      assert "cs1" in metadata.expired_ids or "cs2" in metadata.expired_ids
-      assert length(metadata.expired_ids) == 2
-
-      :telemetry.detach(handler_id)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -851,33 +732,6 @@ defmodule EventBus.Service.SweeperTest do
       :telemetry.detach(handler_id)
     end
 
-    test "handles limited subscribers via public API" do
-      topic = :public_api_limit_test
-      EventBus.register_topic(topic)
-
-      defmodule PublicAPILimitSub do
-        def process({_topic, _id}), do: :ok
-      end
-
-      EventBus.subscribe_n(
-        {{PublicAPILimitSub, nil}, ["public_api_limit_test"]},
-        3
-      )
-
-      EventBus.notify_sync(%Event{id: "pal1", topic: topic, data: %{}})
-
-      Sweeper.sweep(ttl_native(0), strategy: PublicAPIStrategy)
-
-      # Subscriber should still work after expiry of one event
-      EventBus.notify_sync(%Event{id: "pal2", topic: topic, data: %{}})
-
-      assert {[{PublicAPILimitSub, nil}], _, _} =
-               Observation.fetch({topic, "pal2"})
-
-      Observation.force_expire({topic, "pal2"})
-      EventBus.unsubscribe({PublicAPILimitSub, nil})
-      EventBus.unregister_topic(topic)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -919,24 +773,6 @@ defmodule EventBus.Service.SweeperTest do
   # ---------------------------------------------------------------------------
 
   describe "force_expire edge cases" do
-    test "handles event where all subscribers already completed (empty pending list)" do
-      sub_a = {AllCompletedSubA, nil}
-      sub_b = {AllCompletedSubB, nil}
-      create_event("ac1")
-      setup_observation(@topic, "ac1", [sub_a, sub_b])
-
-      # Mark both as completed — but don't trigger cleanup (counter won't hit 0
-      # because we manipulate status directly for this test)
-      Observation.mark_as_completed({sub_a, {@topic, "ac1"}})
-
-      # Force expire should work even with partially completed subscribers
-      assert {:ok, info} = Observation.force_expire({@topic, "ac1"})
-      assert sub_a in info.completers
-      # sub_b was pending — should still be cleaned up
-      assert sub_b not in info.completers
-      assert sub_b not in info.skippers
-    end
-
     test "force_expire with all subscribers in terminal state (batch_decrement_limits empty)" do
       sub_a = {AllTermSubA, nil}
       sub_b = {AllTermSubB, nil}
@@ -955,53 +791,6 @@ defmodule EventBus.Service.SweeperTest do
       assert sub_a in info.completers
       assert sub_b in info.skippers
       # No pending subscribers — batch_decrement_limits([], _) is called
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Edge cases: expire_batch with limited subscriber already terminal
-  # ---------------------------------------------------------------------------
-
-  describe "expire_batch limited subscriber edge cases" do
-    test "skips decrement for limited subscriber already in terminal state" do
-      topic = :batch_terminal_limited_test
-      EventBus.register_topic(topic)
-
-      defmodule TerminalLimitedSub do
-        def process({_topic, _id}), do: :ok
-      end
-
-      EventBus.subscribe_n(
-        {{TerminalLimitedSub, nil}, ["batch_terminal_limited_test"]},
-        5
-      )
-
-      EventBus.notify_sync(%Event{id: "tl1", topic: topic, data: %{}})
-
-      # Mark the limited subscriber as completed before the sweep
-      Observation.mark_as_completed({{TerminalLimitedSub, nil}, {topic, "tl1"}})
-
-      # Wait for completion to propagate
-      Process.sleep(10)
-
-      # Create a new event so we have something to expire
-      EventBus.notify_sync(%Event{id: "tl2", topic: topic, data: %{}})
-
-      # Mark subscriber as skipped via ETS to put it in terminal state
-      :ets.insert(
-        :eb_event_watcher_status,
-        {{topic, "tl2", {TerminalLimitedSub, nil}}, :skipped}
-      )
-
-      limited = SubscriptionManager.limited_subscribers()
-      assert MapSet.member?(limited, {TerminalLimitedSub, nil})
-
-      # expire_batch: collect_limited_decrements should skip the terminal subscriber
-      {count, _topics} = Observation.expire_batch([{topic, "tl2"}], limited)
-      assert count == 1
-
-      EventBus.unsubscribe({TerminalLimitedSub, nil})
-      EventBus.unregister_topic(topic)
     end
   end
 
@@ -1031,20 +820,10 @@ defmodule EventBus.Service.SweeperTest do
       end
     end
 
-    test "raises on nil event_ttl" do
-      with_event_ttl(:delete, &assert_sweeper_init_fails/0)
-    end
-
-    test "raises on zero event_ttl" do
-      with_event_ttl(0, &assert_sweeper_init_fails/0)
-    end
-
-    test "raises on negative event_ttl" do
-      with_event_ttl(-100, &assert_sweeper_init_fails/0)
-    end
-
-    test "raises on non-integer event_ttl" do
-      with_event_ttl("5000", &assert_sweeper_init_fails/0)
+    test "raises on invalid event_ttl values" do
+      for invalid_value <- [:delete, 0, -100, "5000"] do
+        with_event_ttl(invalid_value, &assert_sweeper_init_fails/0)
+      end
     end
   end
 

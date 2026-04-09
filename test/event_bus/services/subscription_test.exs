@@ -165,4 +165,23 @@ defmodule EventBus.Service.SubscriptionTest do
     assert opts.priority == 7
     assert is_function(opts.guard, 1)
   end
+
+  test "fetch_opts returns defaults for unknown subscriber" do
+    opts = EventBus.Manager.Subscription.fetch_opts({UnknownModule, nil})
+    assert opts == %{priority: 0, guard: nil}
+  end
+
+  test "subscribe with non-integer priority raises ArgumentError" do
+    assert_raise ArgumentError, ":priority must be an integer", fn ->
+      EventBus.subscribe({{InputLogger, %{}}, [".*"]}, priority: "high")
+    end
+  end
+
+  test "subscribe with invalid guard raises ArgumentError" do
+    assert_raise ArgumentError, ":guard must be a 1-arity function", fn ->
+      EventBus.subscribe({{InputLogger, %{}}, [".*"]},
+        guard: "not_a_function"
+      )
+    end
+  end
 end

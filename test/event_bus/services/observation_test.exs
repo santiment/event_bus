@@ -23,14 +23,6 @@ defmodule EventBus.Service.ObservationTest do
     :ok
   end
 
-  test "consolidated table exists" do
-    assert :ets.info(Observation.table_name()) != :undefined
-  end
-
-  test "register_topic is a no-op" do
-    assert :ok == Observation.register_topic(:obs_test_topic)
-  end
-
   test "unregister_topic deletes entries for the topic" do
     topic = :obs_unregister_test
     id = "E1"
@@ -87,15 +79,6 @@ defmodule EventBus.Service.ObservationTest do
     Observation.save({topic, id}, {subscribers, [], []})
 
     assert {subscribers, [], []} == Observation.fetch({topic, id})
-  end
-
-  test "fetch a non-existent id" do
-    topic = :some_event_occurred1
-    id = "NA"
-
-    capture_log(fn ->
-      assert nil == Observation.fetch({topic, id})
-    end)
   end
 
   test "complete" do

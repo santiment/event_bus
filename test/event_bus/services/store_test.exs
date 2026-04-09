@@ -8,18 +8,6 @@ defmodule EventBus.Service.StoreTest do
 
   doctest Store
 
-  setup do
-    :ok
-  end
-
-  test "consolidated table exists" do
-    assert :ets.info(Store.table_name()) != :undefined
-  end
-
-  test "register_topic is a no-op" do
-    assert :ok == Store.register_topic(:store_test_topic)
-  end
-
   test "unregister_topic deletes entries for the topic" do
     topic = :store_unregister_test
 

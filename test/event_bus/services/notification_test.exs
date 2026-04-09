@@ -101,4 +101,21 @@ defmodule EventBus.Service.NotificationTest do
              "Topic :metrics_received doesn't have subscribers"
            )
   end
+
+  test "notify for unregistered topic warns differently" do
+    event = %Event{
+      id: "E2",
+      topic: :completely_unknown_topic,
+      data: %{test: true}
+    }
+
+    logs =
+      capture_log(fn ->
+        Notification.notify(event)
+        Process.sleep(100)
+      end)
+
+    assert logs =~ "completely_unknown_topic"
+    assert logs =~ "is not registered and has no subscribers"
+  end
 end

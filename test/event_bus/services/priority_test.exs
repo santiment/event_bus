@@ -79,33 +79,15 @@ defmodule EventBus.Service.PriorityTest do
     Process.sleep(200)
   end
 
-  test "subscribers are dispatched in priority order" do
+  test "subscribers are dispatched in priority order (default is 0)" do
     Process.register(self(), :priority_test)
 
-    # Subscribe in reverse priority order
+    # Subscribe in reverse priority order; MedPriority uses default (0)
     EventBus.subscribe({LowPriority, ["priority_test_topic"]}, priority: -10)
     EventBus.subscribe({HighPriority, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({MedPriority, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({MedPriority, ["priority_test_topic"]})
 
     notify_and_wait("prio-1")
-
-    assert_received {:processed, :high, t1}
-    assert_received {:processed, :med, t2}
-    assert_received {:processed, :low, t3}
-
-    assert t1 <= t2
-    assert t2 <= t3
-  end
-
-  test "default priority is 0" do
-    Process.register(self(), :priority_test)
-
-    EventBus.subscribe({LowPriority, ["priority_test_topic"]}, priority: -10)
-    # No priority specified - defaults to 0
-    EventBus.subscribe({MedPriority, ["priority_test_topic"]})
-    EventBus.subscribe({HighPriority, ["priority_test_topic"]}, priority: 10)
-
-    notify_and_wait("prio-default-1")
 
     assert_received {:processed, :high, t1}
     assert_received {:processed, :med, t2}
