@@ -83,8 +83,7 @@ defmodule EventBus.Service.Store do
   @spec expired_match_spec(integer()) :: :ets.match_spec()
   defp expired_match_spec(cutoff) do
     [
-      {{{:"$1", :"$2"}, :_, %{inserted_at: :"$3"}},
-       [{:<, :"$3", cutoff}],
+      {{{:"$1", :"$2"}, :_, %{inserted_at: :"$3"}}, [{:<, :"$3", cutoff}],
        [{{:"$1", :"$2", :"$3"}}]}
     ]
   end
@@ -99,7 +98,9 @@ defmodule EventBus.Service.Store do
   @spec select_expired(integer(), pos_integer()) ::
           {[{atom(), term(), integer()}], term()} | :done
   def select_expired(cutoff, batch_size) do
-    wrap_select_result(:ets.select(@table, expired_match_spec(cutoff), batch_size))
+    wrap_select_result(
+      :ets.select(@table, expired_match_spec(cutoff), batch_size)
+    )
   end
 
   @doc """

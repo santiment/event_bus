@@ -124,8 +124,11 @@ defmodule EventBus.Service.SubscriptionTest do
   test "subscribers with event type and without config" do
     Subscription.subscribe({AnotherCalculator, [".*"]})
 
-    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_received)
-    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_summed)
+    assert [{AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_received)
+
+    assert [{AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_summed)
   end
 
   test "state is stored in ETS tables" do

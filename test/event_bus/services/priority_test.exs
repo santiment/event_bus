@@ -136,8 +136,13 @@ defmodule EventBus.Service.PriorityTest do
   test "cancellation via return value stops propagation" do
     Process.register(self(), :priority_test)
 
-    EventBus.subscribe({CancellingSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({CancellingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     notify_and_wait("cancel-return-1")
 
@@ -154,8 +159,13 @@ defmodule EventBus.Service.PriorityTest do
   test "return-value cancellation cleans up even without explicit completion" do
     Process.register(self(), :priority_test)
 
-    EventBus.subscribe({ImplicitCancellingSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({ImplicitCancellingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     notify_and_wait("cancel-return-implicit-1")
 
@@ -171,8 +181,13 @@ defmodule EventBus.Service.PriorityTest do
   test "cancellation via CancelEvent exception stops propagation" do
     Process.register(self(), :priority_test)
 
-    EventBus.subscribe({CancelRaisingSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({CancelRaisingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     capture_log(fn ->
       notify_and_wait("cancel-raise-1")
@@ -196,8 +211,13 @@ defmodule EventBus.Service.PriorityTest do
       end
     end
 
-    EventBus.subscribe({RegularErrorSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({RegularErrorSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     capture_log(fn ->
       notify_and_wait("no-cancel-error-1")

@@ -18,18 +18,33 @@ defmodule EventBus.Service.Sweeper do
   def init(_opts) do
     ttl_ms = Application.get_env(:event_bus, :event_ttl)
 
-    unless is_integer(ttl_ms) and ttl_ms > 0 do
+    if !(is_integer(ttl_ms) and ttl_ms > 0) do
       raise ArgumentError,
             "EventBus.Service.Sweeper requires :event_ttl to be a positive integer (milliseconds), got: #{inspect(ttl_ms)}"
     end
 
-    interval = Application.get_env(:event_bus, :sweep_interval, @default_sweep_interval)
-    batch_size = Application.get_env(:event_bus, :sweep_batch_size, @default_batch_size)
-    strategy = resolve_strategy(Application.get_env(:event_bus, :sweep_strategy, :bulk_smart))
+    interval =
+      Application.get_env(:event_bus, :sweep_interval, @default_sweep_interval)
+
+    batch_size =
+      Application.get_env(:event_bus, :sweep_batch_size, @default_batch_size)
+
+    strategy =
+      resolve_strategy(
+        Application.get_env(:event_bus, :sweep_strategy, :bulk_smart)
+      )
+
     ttl_native = System.convert_time_unit(ttl_ms, :millisecond, :native)
 
     schedule_sweep(interval)
-    {:ok, %{ttl_native: ttl_native, interval: interval, batch_size: batch_size, strategy: strategy}}
+
+    {:ok,
+     %{
+       ttl_native: ttl_native,
+       interval: interval,
+       batch_size: batch_size,
+       strategy: strategy
+     }}
   end
 
   @doc false

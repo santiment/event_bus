@@ -43,7 +43,11 @@ defmodule EventBus.Service.Subscription do
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topics}) do
     subscriber = normalize(subscriber)
-    Debug.log("subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}")
+
+    Debug.log(
+      "subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}"
+    )
+
     :ets.insert(@subscribers_table, {subscriber, topics})
     rebuild_topic_map_for_subscriber(subscriber, topics)
 

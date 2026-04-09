@@ -122,7 +122,9 @@ defmodule EventBus.Service.Observation do
   end
 
   @doc false
-  @spec save_snapshot(event_shadow(), %{optional(EventBus.subscriber()) => non_neg_integer()}) ::
+  @spec save_snapshot(event_shadow(), %{
+          optional(EventBus.subscriber()) => non_neg_integer()
+        }) ::
           :ok
   def save_snapshot({topic, id}, snapshot) do
     :ets.insert(@snapshot_table, {{topic, id}, snapshot})
@@ -218,7 +220,8 @@ defmodule EventBus.Service.Observation do
         :ets.delete(@snapshot_table, {topic, id})
         StoreService.delete({topic, id})
 
-        {:ok, %{subscribers: subscribers, completers: completers, skippers: skippers}}
+        {:ok,
+         %{subscribers: subscribers, completers: completers, skippers: skippers}}
 
       _ ->
         :not_found
@@ -267,10 +270,13 @@ defmodule EventBus.Service.Observation do
 
       {[], to_delete}
     else
-      Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow, {dec_acc, del_acc} ->
+      Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow,
+                                              {dec_acc, del_acc} ->
         case :ets.lookup(@table, {topic, id}) do
           [{{^topic, ^id}, subscribers, _}] ->
-            pending_decs = collect_limited_decrements(topic, id, subscribers, limited_set)
+            pending_decs =
+              collect_limited_decrements(topic, id, subscribers, limited_set)
+
             {pending_decs ++ dec_acc, [shadow | del_acc]}
 
           _ ->
@@ -323,7 +329,9 @@ defmodule EventBus.Service.Observation do
 
   defp batch_decrement_limits(pending, {topic, id}) do
     subscriber_generations =
-      Enum.map(pending, fn sub -> {sub, snapshot_generation({topic, id}, sub)} end)
+      Enum.map(pending, fn sub ->
+        {sub, snapshot_generation({topic, id}, sub)}
+      end)
 
     SubscriptionManager.decrement_limits(subscriber_generations)
   end

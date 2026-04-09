@@ -78,7 +78,10 @@ defmodule EventBus.SweepRuntime do
           }
   def expire_batch(event_shadows) do
     limited_set = SubscriptionManager.limited_subscribers()
-    {count, topic_counts} = ObservationService.expire_batch(event_shadows, limited_set)
+
+    {count, topic_counts} =
+      ObservationService.expire_batch(event_shadows, limited_set)
+
     %{expired_count: count, expired_per_topic: topic_counts}
   end
 end

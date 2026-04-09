@@ -36,7 +36,11 @@ defmodule EventBus.Service.SweeperTest do
 
   defp create_event(id, topic \\ @topic, age_ms \\ 0) do
     event = %Event{id: id, topic: topic, data: %{test: true}}
-    inserted_at = System.monotonic_time() - System.convert_time_unit(age_ms, :millisecond, :native)
+
+    inserted_at =
+      System.monotonic_time() -
+        System.convert_time_unit(age_ms, :millisecond, :native)
+
     metadata = %{inserted_at: inserted_at}
     :ets.insert(Store.table_name(), {{topic, id}, event, metadata})
     event
@@ -58,7 +62,11 @@ defmodule EventBus.Service.SweeperTest do
 
   describe "Store.select_expired/2 cursor API" do
     test "returns :done when no events match" do
-      assert :done == Store.select_expired(System.monotonic_time() - ttl_native(60_000), 10)
+      assert :done ==
+               Store.select_expired(
+                 System.monotonic_time() - ttl_native(60_000),
+                 10
+               )
     end
 
     test "returns a batch and continuation" do
@@ -104,8 +112,15 @@ defmodule EventBus.Service.SweeperTest do
       assert {:ok, _} = Observation.force_expire({@topic, "fe1"})
 
       assert [] == :ets.lookup(Observation.table_name(), {@topic, "fe1"})
-      assert [] == :ets.lookup(:eb_event_watcher_status, {@topic, "fe1", subscriber})
-      assert [] == :ets.lookup(:eb_event_subscription_generations, {@topic, "fe1"})
+
+      assert [] ==
+               :ets.lookup(
+                 :eb_event_watcher_status,
+                 {@topic, "fe1", subscriber}
+               )
+
+      assert [] ==
+               :ets.lookup(:eb_event_subscription_generations, {@topic, "fe1"})
 
       capture_log(fn ->
         assert nil == Store.fetch({@topic, "fe1"})
@@ -146,7 +161,13 @@ defmodule EventBus.Service.SweeperTest do
         SubscriptionManager.prepare_subscribers_for_dispatch([subscriber])
 
       create_event("fe3", topic)
-      setup_observation(topic, "fe3", [subscriber, blocker], Map.put(snapshot1, blocker, 0))
+
+      setup_observation(
+        topic,
+        "fe3",
+        [subscriber, blocker],
+        Map.put(snapshot1, blocker, 0)
+      )
 
       {[^subscriber], snapshot2} =
         SubscriptionManager.prepare_subscribers_for_dispatch([subscriber])
@@ -162,6 +183,7 @@ defmodule EventBus.Service.SweeperTest do
       assert EventBus.subscribed?({subscriber, ["force_expire_limit_test"]})
 
       assert {:ok, _} = Observation.force_expire({topic, "fe4"})
+
       # Now both events expired — remaining=0, in_flight=0 → auto-unsubscribed
       refute EventBus.subscribed?({subscriber, ["force_expire_limit_test"]})
 
@@ -202,7 +224,12 @@ defmodule EventBus.Service.SweeperTest do
       setup_observation(@topic, "exists", [sub])
 
       limited = SubscriptionManager.limited_subscribers()
-      assert {1, %{@topic => 1}} = Observation.expire_batch([{@topic, "exists"}, {@topic, "ghost"}], limited)
+
+      assert {1, %{@topic => 1}} =
+               Observation.expire_batch(
+                 [{@topic, "exists"}, {@topic, "ghost"}],
+                 limited
+               )
     end
 
     test "fast path with empty limited_set" do
@@ -214,7 +241,9 @@ defmodule EventBus.Service.SweeperTest do
       end
 
       shadows = Enum.map(1..3, fn i -> {@topic, "fp#{i}"} end)
-      assert {3, %{@topic => 3}} = Observation.expire_batch(shadows, MapSet.new())
+
+      assert {3, %{@topic => 3}} =
+               Observation.expire_batch(shadows, MapSet.new())
 
       for i <- 1..3 do
         assert [] == :ets.lookup(Store.table_name(), {@topic, "fp#{i}"})
@@ -293,7 +322,10 @@ defmodule EventBus.Service.SweeperTest do
       Observation.expire_batch([{topic, "mx1"}], limited)
 
       EventBus.notify_sync(%Event{id: "mx2", topic: topic, data: %{}})
-      subscribers = Enum.map(elem(Observation.fetch({topic, "mx2"}), 0), &elem(&1, 0))
+
+      subscribers =
+        Enum.map(elem(Observation.fetch({topic, "mx2"}), 0), &elem(&1, 0))
+
       assert MixedLimited in subscribers
 
       Observation.force_expire({topic, "mx2"})
@@ -365,8 +397,15 @@ defmodule EventBus.Service.SweeperTest do
 
       assert [] == :ets.lookup(Store.table_name(), {@topic, "clean1"})
       assert [] == :ets.lookup(Observation.table_name(), {@topic, "clean1"})
-      assert [] == :ets.lookup(:eb_event_watcher_status, {@topic, "clean1", sub})
-      assert [] == :ets.lookup(:eb_event_subscription_generations, {@topic, "clean1"})
+
+      assert [] ==
+               :ets.lookup(:eb_event_watcher_status, {@topic, "clean1", sub})
+
+      assert [] ==
+               :ets.lookup(
+                 :eb_event_subscription_generations,
+                 {@topic, "clean1"}
+               )
     end
 
     test "processes events across multiple internal batches" do
@@ -596,8 +635,13 @@ defmodule EventBus.Service.SweeperTest do
       GenServer.stop(pid)
       :telemetry.detach(handler_id)
 
-      if prev_ttl, do: Application.put_env(:event_bus, :event_ttl, prev_ttl), else: Application.delete_env(:event_bus, :event_ttl)
-      if prev_interval, do: Application.put_env(:event_bus, :sweep_interval, prev_interval), else: Application.delete_env(:event_bus, :sweep_interval)
+      if prev_ttl,
+        do: Application.put_env(:event_bus, :event_ttl, prev_ttl),
+        else: Application.delete_env(:event_bus, :event_ttl)
+
+      if prev_interval,
+        do: Application.put_env(:event_bus, :sweep_interval, prev_interval),
+        else: Application.delete_env(:event_bus, :sweep_interval)
     end
   end
 
@@ -617,7 +661,8 @@ defmodule EventBus.Service.SweeperTest do
     end
 
     test "returns :not_found for already-cleaned events" do
-      assert :not_found == EventBus.SweepRuntime.expire_event({@topic, "nonexistent"})
+      assert :not_found ==
+               EventBus.SweepRuntime.expire_event({@topic, "nonexistent"})
     end
   end
 
@@ -662,7 +707,9 @@ defmodule EventBus.Service.SweeperTest do
 
       # Subscriber should still work after expiry
       EventBus.notify_sync(%Event{id: "srbl2", topic: topic, data: %{}})
-      assert {[{SRBatchLimitSub, nil}], _, _} = Observation.fetch({topic, "srbl2"})
+
+      assert {[{SRBatchLimitSub, nil}], _, _} =
+               Observation.fetch({topic, "srbl2"})
 
       Observation.force_expire({topic, "srbl2"})
       EventBus.unsubscribe({SRBatchLimitSub, nil})
@@ -690,7 +737,10 @@ defmodule EventBus.Service.SweeperTest do
       @impl true
       def handle_batch(batch, state) do
         event_shadows = Enum.map(batch, fn {topic, id, _} -> {topic, id} end)
-        {count, _topics} = ObservationService.expire_batch(event_shadows, state.limited)
+
+        {count, _topics} =
+          ObservationService.expire_batch(event_shadows, state.limited)
+
         ids = Enum.map(event_shadows, fn {_topic, id} -> id end)
         {count, %{state | ids: state.ids ++ ids}}
       end
@@ -758,8 +808,12 @@ defmodule EventBus.Service.SweeperTest do
             end
           end)
 
-        event_shadows = Enum.map(batch, fn {topic, id, _inserted_at} -> {topic, id} end)
-        %{expired_count: count} = EventBus.SweepRuntime.expire_batch(event_shadows)
+        event_shadows =
+          Enum.map(batch, fn {topic, id, _inserted_at} -> {topic, id} end)
+
+        %{expired_count: count} =
+          EventBus.SweepRuntime.expire_batch(event_shadows)
+
         {count, %{state | captured: state.captured ++ captured}}
       end
 
@@ -805,7 +859,10 @@ defmodule EventBus.Service.SweeperTest do
         def process({_topic, _id}), do: :ok
       end
 
-      EventBus.subscribe_n({{PublicAPILimitSub, nil}, ["public_api_limit_test"]}, 3)
+      EventBus.subscribe_n(
+        {{PublicAPILimitSub, nil}, ["public_api_limit_test"]},
+        3
+      )
 
       EventBus.notify_sync(%Event{id: "pal1", topic: topic, data: %{}})
 
@@ -813,11 +870,203 @@ defmodule EventBus.Service.SweeperTest do
 
       # Subscriber should still work after expiry of one event
       EventBus.notify_sync(%Event{id: "pal2", topic: topic, data: %{}})
-      assert {[{PublicAPILimitSub, nil}], _, _} = Observation.fetch({topic, "pal2"})
+
+      assert {[{PublicAPILimitSub, nil}], _, _} =
+               Observation.fetch({topic, "pal2"})
 
       Observation.force_expire({topic, "pal2"})
       EventBus.unsubscribe({PublicAPILimitSub, nil})
       EventBus.unregister_topic(topic)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Edge cases: detailed :not_found path
+  # ---------------------------------------------------------------------------
+
+  describe "detailed strategy :not_found path" do
+    test "handles events cleaned between cursor scan and expiration" do
+      sub = {NotFoundDetailSub, nil}
+      # Create and set up an event that will appear in the cursor
+      create_event("nf1", @topic, 2_000)
+      setup_observation(@topic, "nf1", [sub])
+
+      # Clean it up before the sweep runs — simulates normal completion race
+      Observation.force_expire({@topic, "nf1"})
+
+      # Now manually insert a stale entry in the store so the cursor picks it up,
+      # but observation state is already gone
+      inserted_at =
+        System.monotonic_time() -
+          System.convert_time_unit(2_000, :millisecond, :native)
+
+      metadata = %{inserted_at: inserted_at}
+
+      :ets.insert(
+        Store.table_name(),
+        {{@topic, "nf1"}, %Event{id: "nf1", topic: @topic, data: %{}}, metadata}
+      )
+
+      # The detailed strategy should handle :not_found gracefully and count it as 0
+      assert 0 == Sweeper.sweep(ttl_native(500), strategy: :detailed)
+
+      Store.delete({@topic, "nf1"})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Edge cases: force_expire with all subscribers terminal
+  # ---------------------------------------------------------------------------
+
+  describe "force_expire edge cases" do
+    test "handles event where all subscribers already completed (empty pending list)" do
+      sub_a = {AllCompletedSubA, nil}
+      sub_b = {AllCompletedSubB, nil}
+      create_event("ac1")
+      setup_observation(@topic, "ac1", [sub_a, sub_b])
+
+      # Mark both as completed — but don't trigger cleanup (counter won't hit 0
+      # because we manipulate status directly for this test)
+      Observation.mark_as_completed({sub_a, {@topic, "ac1"}})
+
+      # Force expire should work even with partially completed subscribers
+      assert {:ok, info} = Observation.force_expire({@topic, "ac1"})
+      assert sub_a in info.completers
+      # sub_b was pending — should still be cleaned up
+      assert sub_b not in info.completers
+      assert sub_b not in info.skippers
+    end
+
+    test "force_expire with all subscribers in terminal state (batch_decrement_limits empty)" do
+      sub_a = {AllTermSubA, nil}
+      sub_b = {AllTermSubB, nil}
+      create_event("at1")
+      setup_observation(@topic, "at1", [sub_a, sub_b])
+
+      # Mark both via ETS directly so counter doesn't trigger on_complete
+      :ets.insert(
+        :eb_event_watcher_status,
+        {{@topic, "at1", sub_a}, :completed}
+      )
+
+      :ets.insert(:eb_event_watcher_status, {{@topic, "at1", sub_b}, :skipped})
+
+      assert {:ok, info} = Observation.force_expire({@topic, "at1"})
+      assert sub_a in info.completers
+      assert sub_b in info.skippers
+      # No pending subscribers — batch_decrement_limits([], _) is called
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Edge cases: expire_batch with limited subscriber already terminal
+  # ---------------------------------------------------------------------------
+
+  describe "expire_batch limited subscriber edge cases" do
+    test "skips decrement for limited subscriber already in terminal state" do
+      topic = :batch_terminal_limited_test
+      EventBus.register_topic(topic)
+
+      defmodule TerminalLimitedSub do
+        def process({_topic, _id}), do: :ok
+      end
+
+      EventBus.subscribe_n(
+        {{TerminalLimitedSub, nil}, ["batch_terminal_limited_test"]},
+        5
+      )
+
+      EventBus.notify_sync(%Event{id: "tl1", topic: topic, data: %{}})
+
+      # Mark the limited subscriber as completed before the sweep
+      Observation.mark_as_completed({{TerminalLimitedSub, nil}, {topic, "tl1"}})
+
+      # Wait for completion to propagate
+      Process.sleep(10)
+
+      # Create a new event so we have something to expire
+      EventBus.notify_sync(%Event{id: "tl2", topic: topic, data: %{}})
+
+      # Mark subscriber as skipped via ETS to put it in terminal state
+      :ets.insert(
+        :eb_event_watcher_status,
+        {{topic, "tl2", {TerminalLimitedSub, nil}}, :skipped}
+      )
+
+      limited = SubscriptionManager.limited_subscribers()
+      assert MapSet.member?(limited, {TerminalLimitedSub, nil})
+
+      # expire_batch: collect_limited_decrements should skip the terminal subscriber
+      {count, _topics} = Observation.expire_batch([{topic, "tl2"}], limited)
+      assert count == 1
+
+      EventBus.unsubscribe({TerminalLimitedSub, nil})
+      EventBus.unregister_topic(topic)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Edge cases: Sweeper GenServer config validation
+  # ---------------------------------------------------------------------------
+
+  describe "Sweeper GenServer config validation" do
+    defp assert_sweeper_init_fails do
+      assert {:error, {{%ArgumentError{}, _stacktrace}, _child_spec}} =
+               start_supervised({Sweeper, []}, restart: :temporary)
+    end
+
+    defp with_event_ttl(value, fun) do
+      prev = Application.get_env(:event_bus, :event_ttl)
+
+      if value == :delete,
+        do: Application.delete_env(:event_bus, :event_ttl),
+        else: Application.put_env(:event_bus, :event_ttl, value)
+
+      try do
+        fun.()
+      after
+        if prev,
+          do: Application.put_env(:event_bus, :event_ttl, prev),
+          else: Application.delete_env(:event_bus, :event_ttl)
+      end
+    end
+
+    test "raises on nil event_ttl" do
+      with_event_ttl(:delete, &assert_sweeper_init_fails/0)
+    end
+
+    test "raises on zero event_ttl" do
+      with_event_ttl(0, &assert_sweeper_init_fails/0)
+    end
+
+    test "raises on negative event_ttl" do
+      with_event_ttl(-100, &assert_sweeper_init_fails/0)
+    end
+
+    test "raises on non-integer event_ttl" do
+      with_event_ttl("5000", &assert_sweeper_init_fails/0)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Edge cases: sweep with custom batch_size
+  # ---------------------------------------------------------------------------
+
+  describe "sweep with batch_size option" do
+    test "respects custom batch_size" do
+      sub = {BatchSizeOptSub, nil}
+
+      for i <- 1..5 do
+        create_event("bs#{i}", @topic, 2_000)
+        setup_observation(@topic, "bs#{i}", [sub])
+      end
+
+      # batch_size: 2 means we need 3 cursor iterations to expire 5 events
+      assert 5 == Sweeper.sweep(ttl_native(500), batch_size: 2)
+
+      for i <- 1..5 do
+        assert [] == :ets.lookup(Store.table_name(), {@topic, "bs#{i}"})
+      end
     end
   end
 

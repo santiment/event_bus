@@ -216,7 +216,9 @@ defmodule EventBus.Service.ObservationTest do
     Observation.save({topic, id}, {subscribers, [], []})
     Observation.mark_as_completed({subscriber, {topic, id}})
 
-    assert_receive {:telemetry, [:event_bus, :observation, :complete], measurements, metadata}
+    assert_receive {:telemetry, [:event_bus, :observation, :complete],
+                    measurements, metadata}
+
     assert measurements.subscriber_count == 1
     assert metadata.topic == topic
     assert metadata.event_id == id
@@ -247,5 +249,74 @@ defmodule EventBus.Service.ObservationTest do
     capture_log(fn ->
       Observation.mark_as_completed({subscriber, {topic, id}})
     end)
+  end
+
+  test "fetch logs at info level when observation is missing" do
+    topic = :obs_fetch_log_test
+    id = "missing"
+
+    # Temporarily lower Logger level so the lazy info message gets evaluated
+    prev_level = Logger.level()
+    Logger.configure(level: :info)
+
+    log =
+      capture_log([level: :info], fn ->
+        assert nil == Observation.fetch({topic, id})
+      end)
+
+    Logger.configure(level: prev_level)
+
+    assert log =~ "[EVENTBUS][OBSERVATION]"
+    assert log =~ "#{topic}.#{id}.ets_fetch_error"
+  end
+
+  test "check_completion handles concurrent watcher deletion gracefully" do
+    # Simulate the race condition where the watcher entry is deleted
+    # between CAS on status_table and update_counter on watchers table.
+    topic = :concurrent_delete_test
+    id = "RACE1"
+    subscriber = {InputLogger, %{}}
+
+    # Set up status entry (so CAS succeeds) but no watcher entry
+    :ets.insert(:eb_event_watcher_status, {{topic, id, subscriber}, :pending})
+
+    # mark_as_completed: CAS succeeds (pending -> completed),
+    # then check_completion tries update_counter on missing key -> rescue ArgumentError
+    assert :ok == Observation.mark_as_completed({subscriber, {topic, id}})
+
+    # Clean up
+    :ets.delete(:eb_event_watcher_status, {topic, id, subscriber})
+  end
+
+  test "on_complete handles already-cleaned watcher entry" do
+    # Simulate the race where on_complete fires but the watcher entry
+    # was already deleted by a concurrent force_expire.
+    topic = :on_complete_race_test
+    id = "RACE2"
+    sub_a = {InputLogger, %{}}
+    sub_b = {Calculator, %{}}
+
+    Store.create(%EventBus.Model.Event{id: id, topic: topic, data: nil})
+    Observation.save({topic, id}, {[sub_a, sub_b], [], []})
+    Observation.save_snapshot({topic, id}, %{sub_a => 0, sub_b => 0})
+
+    # Complete sub_a normally (counter: 2 -> 1)
+    Observation.mark_as_completed({sub_a, {topic, id}})
+    # Watcher still exists
+    assert [{_, _, 1}] = :ets.lookup(Observation.table_name(), {topic, id})
+
+    # Now simulate: delete the watcher before sub_b completes, as if
+    # force_expire ran concurrently
+    :ets.delete(Observation.table_name(), {topic, id})
+    :ets.delete(:eb_event_subscription_generations, {topic, id})
+
+    # sub_b's CAS will succeed (status_table entry still exists)
+    # but check_completion will hit the ArgumentError rescue
+    assert :ok == Observation.mark_as_completed({sub_b, {topic, id}})
+
+    # Clean up remaining status and store entries
+    :ets.delete(:eb_event_watcher_status, {topic, id, sub_a})
+    :ets.delete(:eb_event_watcher_status, {topic, id, sub_b})
+    Store.delete({topic, id})
   end
 end

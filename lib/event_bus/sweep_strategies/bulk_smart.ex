@@ -19,7 +19,8 @@ defmodule EventBus.SweepStrategy.BulkSmart do
 
   @impl true
   def handle_batch(batch, %{topic_counts: topic_counts} = state) do
-    event_shadows = Enum.map(batch, fn {topic, id, _inserted_at} -> {topic, id} end)
+    event_shadows =
+      Enum.map(batch, fn {topic, id, _inserted_at} -> {topic, id} end)
 
     %{expired_count: count, expired_per_topic: batch_topics} =
       EventBus.SweepRuntime.expire_batch(event_shadows)
