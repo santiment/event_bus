@@ -151,7 +151,6 @@ defmodule EventBus.Service.Observation do
         {completers, skippers} = collect_terminal(topic, id, subscribers)
 
         Debug.log("cleaned topic=#{inspect(topic)} id=#{inspect(id)}")
-        Debug.clean_dispatch_metadata(topic, id)
 
         Telemetry.execute(
           [:event_bus, :observation, :complete],
@@ -164,16 +163,7 @@ defmodule EventBus.Service.Observation do
           }
         )
 
-        # Delete all entries for this event
-        :ets.delete(@table, {topic, id})
-
-        Enum.each(subscribers, fn sub ->
-          :ets.delete(@status_table, {topic, id, sub})
-        end)
-
-        :ets.delete(@snapshot_table, {topic, id})
-
-        StoreService.delete({topic, id})
+        delete_event_entries(topic, id, subscribers)
 
       _ ->
         :ok
@@ -213,12 +203,8 @@ defmodule EventBus.Service.Observation do
         batch_decrement_limits(pending, {topic, id})
 
         Debug.log("expired topic=#{inspect(topic)} id=#{inspect(id)}")
-        Debug.clean_dispatch_metadata(topic, id)
 
-        :ets.delete(@table, {topic, id})
-        :ets.match_delete(@status_table, {{topic, id, :_}, :_})
-        :ets.delete(@snapshot_table, {topic, id})
-        StoreService.delete({topic, id})
+        delete_event_entries(topic, id, subscribers)
 
         {:ok,
          %{subscribers: subscribers, completers: completers, skippers: skippers}}
@@ -253,31 +239,35 @@ defmodule EventBus.Service.Observation do
     # Delete from all ETS tables.
     delete_expired(to_delete)
 
-    topic_counts = Enum.frequencies_by(to_delete, fn {topic, _id} -> topic end)
+    topic_counts =
+      Enum.frequencies_by(to_delete, fn {topic, _id, _subs} -> topic end)
+
     {length(to_delete), topic_counts}
   end
 
   defp collect_batch(event_shadows, limited_set) do
     if MapSet.size(limited_set) == 0 do
       # Fast path: pure ETS operations, no GenServer calls.
-      # The member check and later delete are not atomic — on_complete could
+      # The lookup and later delete are not atomic — on_complete could
       # clean the entry in between — but the resulting overcount in the
       # returned total is benign (deletes on missing keys are no-ops).
       to_delete =
-        Enum.filter(event_shadows, fn {topic, id} ->
-          :ets.member(@table, {topic, id})
+        Enum.flat_map(event_shadows, fn {topic, id} ->
+          case :ets.lookup(@table, {topic, id}) do
+            [{{^topic, ^id}, subscribers, _}] -> [{topic, id, subscribers}]
+            _ -> []
+          end
         end)
 
       {[], to_delete}
     else
-      Enum.reduce(event_shadows, {[], []}, fn {topic, id} = shadow,
-                                              {dec_acc, del_acc} ->
+      Enum.reduce(event_shadows, {[], []}, fn {topic, id}, {dec_acc, del_acc} ->
         case :ets.lookup(@table, {topic, id}) do
           [{{^topic, ^id}, subscribers, _}] ->
             pending_decs =
               collect_limited_decrements(topic, id, subscribers, limited_set)
 
-            {pending_decs ++ dec_acc, [shadow | del_acc]}
+            {pending_decs ++ dec_acc, [{topic, id, subscribers} | del_acc]}
 
           _ ->
             {dec_acc, del_acc}
@@ -286,29 +276,10 @@ defmodule EventBus.Service.Observation do
     end
   end
 
-  defp delete_expired(event_shadows) do
-    # One scan for all status entries (instead of N match_deletes)
-    batch_select_delete(@status_table, event_shadows, fn {topic, id} ->
-      {{{topic, id, :_}, :_}, [], [true]}
+  defp delete_expired(entries) do
+    Enum.each(entries, fn {topic, id, subscribers} ->
+      delete_event_entries(topic, id, subscribers)
     end)
-
-    # One scan for all debug dispatch metadata
-    Debug.batch_clean_dispatch_metadata(event_shadows)
-
-    # Individual O(1) hash deletes for exact-key tables
-    Enum.each(event_shadows, fn {topic, id} ->
-      :ets.delete(@table, {topic, id})
-      :ets.delete(@snapshot_table, {topic, id})
-      StoreService.delete({topic, id})
-    end)
-  end
-
-  defp batch_select_delete(_table, [], _spec_fn), do: :ok
-
-  defp batch_select_delete(table, event_shadows, spec_fn) do
-    match_spec = Enum.map(event_shadows, spec_fn)
-    :ets.select_delete(table, match_spec)
-    :ok
   end
 
   # Only look up status/snapshot for subscribers that are in the limited set.
@@ -370,6 +341,19 @@ defmodule EventBus.Service.Observation do
       {{:"$1", expected}, [{:==, :"$1", {:const, key}}],
        [{{:"$1", new_status}}]}
     ])
+  end
+
+  # All deletes are O(1) hash lookups — no table scans.
+  defp delete_event_entries(topic, id, subscribers) do
+    Debug.clean_dispatch_metadata(subscribers, topic, id)
+
+    Enum.each(subscribers, fn sub ->
+      :ets.delete(@status_table, {topic, id, sub})
+    end)
+
+    :ets.delete(@table, {topic, id})
+    :ets.delete(@snapshot_table, {topic, id})
+    StoreService.delete({topic, id})
   end
 
   defp snapshot_generation({topic, id}, subscriber) do

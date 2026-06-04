@@ -15,7 +15,7 @@ defmodule EventBus.SweepStrategy.BulkSmart do
   @behaviour EventBus.SweepStrategy
 
   @impl true
-  def init, do: %{topic_counts: %{}}
+  def init(), do: %{topic_counts: %{}}
 
   @impl true
   def handle_batch(batch, %{topic_counts: topic_counts} = state) do

@@ -16,7 +16,7 @@ defmodule EventBus.SweepStrategy.Detailed do
   alias EventBus.Telemetry
 
   @impl true
-  def init, do: nil
+  def init(), do: nil
 
   @impl true
   def handle_batch(batch, state) do

@@ -571,7 +571,6 @@ defmodule EventBus.Service.SweeperTest do
 
       :telemetry.detach(handler_id)
     end
-
   end
 
   # ---------------------------------------------------------------------------
@@ -658,7 +657,6 @@ defmodule EventBus.Service.SweeperTest do
         assert [] == :ets.lookup(Store.table_name(), {@topic, "srb#{i}"})
       end
     end
-
   end
 
   # ---------------------------------------------------------------------------
@@ -731,7 +729,6 @@ defmodule EventBus.Service.SweeperTest do
 
       :telemetry.detach(handler_id)
     end
-
   end
 
   # ---------------------------------------------------------------------------

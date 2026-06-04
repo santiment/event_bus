@@ -72,23 +72,17 @@ defmodule EventBus.Service.Debug do
   end
 
   @doc false
-  @spec clean_dispatch_metadata(atom(), term()) :: :ok
-  def clean_dispatch_metadata(topic, id) do
-    :ets.match_delete(@dispatch_table, {{:_, topic, id}, :_})
-    :ok
-  end
-
-  @doc false
-  @spec batch_clean_dispatch_metadata([{atom(), term()}]) :: :ok
-  def batch_clean_dispatch_metadata([]), do: :ok
-
-  def batch_clean_dispatch_metadata(event_shadows) do
-    match_spec =
-      Enum.map(event_shadows, fn {topic, id} ->
-        {{{:_, topic, id}, :_}, [], [true]}
+  @spec clean_dispatch_metadata([EventBus.subscriber()], atom(), term()) :: :ok
+  def clean_dispatch_metadata(subscribers, topic, id) do
+    # Dispatch metadata is only recorded when debug is enabled, so there is
+    # nothing to delete otherwise. Guarding here keeps the hot completion path
+    # free of N no-op ETS deletes per event when debug is off (the common case).
+    if enabled?() do
+      Enum.each(subscribers, fn sub ->
+        :ets.delete(@dispatch_table, {sub, topic, id})
       end)
+    end
 
-    :ets.select_delete(@dispatch_table, match_spec)
     :ok
   end
 

@@ -24,7 +24,7 @@ defmodule EventBus.SweepStrategy do
         @behaviour EventBus.SweepStrategy
 
         @impl true
-        def init, do: %{dead_lettered: 0}
+        def init(), do: %{dead_lettered: 0}
 
         @impl true
         def handle_batch(batch, state) do
