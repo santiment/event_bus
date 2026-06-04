@@ -124,8 +124,11 @@ defmodule EventBus.Service.SubscriptionTest do
   test "subscribers with event type and without config" do
     Subscription.subscribe({AnotherCalculator, [".*"]})
 
-    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_received)
-    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_summed)
+    assert [{AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_received)
+
+    assert [{AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_summed)
   end
 
   test "state is stored in ETS tables" do
@@ -161,5 +164,24 @@ defmodule EventBus.Service.SubscriptionTest do
     opts = EventBus.Manager.Subscription.fetch_opts({AnotherCalculator, nil})
     assert opts.priority == 7
     assert is_function(opts.guard, 1)
+  end
+
+  test "fetch_opts returns defaults for unknown subscriber" do
+    opts = EventBus.Manager.Subscription.fetch_opts({UnknownModule, nil})
+    assert opts == %{priority: 0, guard: nil}
+  end
+
+  test "subscribe with non-integer priority raises ArgumentError" do
+    assert_raise ArgumentError, ":priority must be an integer", fn ->
+      EventBus.subscribe({{InputLogger, %{}}, [".*"]}, priority: "high")
+    end
+  end
+
+  test "subscribe with invalid guard raises ArgumentError" do
+    assert_raise ArgumentError, ":guard must be a 1-arity function", fn ->
+      EventBus.subscribe({{InputLogger, %{}}, [".*"]},
+        guard: "not_a_function"
+      )
+    end
   end
 end

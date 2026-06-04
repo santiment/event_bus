@@ -46,7 +46,10 @@ defmodule EventBus.Service.Debug do
   @spec record_dispatch(term(), atom(), term()) :: :ok
   def record_dispatch(subscriber, topic, id) do
     if enabled?() do
-      :ets.insert(@dispatch_table, {{subscriber, topic, id}, System.monotonic_time()})
+      :ets.insert(
+        @dispatch_table,
+        {{subscriber, topic, id}, System.monotonic_time()}
+      )
     end
 
     :ok
@@ -69,9 +72,17 @@ defmodule EventBus.Service.Debug do
   end
 
   @doc false
-  @spec clean_dispatch_metadata(atom(), term()) :: :ok
-  def clean_dispatch_metadata(topic, id) do
-    :ets.match_delete(@dispatch_table, {{:_, topic, id}, :_})
+  @spec clean_dispatch_metadata([EventBus.subscriber()], atom(), term()) :: :ok
+  def clean_dispatch_metadata(subscribers, topic, id) do
+    # Dispatch metadata is only recorded when debug is enabled, so there is
+    # nothing to delete otherwise. Guarding here keeps the hot completion path
+    # free of N no-op ETS deletes per event when debug is off (the common case).
+    if enabled?() do
+      Enum.each(subscribers, fn sub ->
+        :ets.delete(@dispatch_table, {sub, topic, id})
+      end)
+    end
+
     :ok
   end
 
@@ -92,11 +103,12 @@ defmodule EventBus.Service.Debug do
       duration_str =
         case fetch_and_clear_dispatch_time(subscriber, topic, id) do
           {:ok, start_time} ->
-            duration_us = System.convert_time_unit(
-              System.monotonic_time() - start_time,
-              :native,
-              :microsecond
-            )
+            duration_us =
+              System.convert_time_unit(
+                System.monotonic_time() - start_time,
+                :native,
+                :microsecond
+              )
 
             " duration=#{format_duration(duration_us)}"
 

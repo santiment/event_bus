@@ -73,7 +73,10 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topic_patterns}) do
-    GenServer.call(__MODULE__, {:subscribe, {normalize(subscriber), topic_patterns}})
+    GenServer.call(
+      __MODULE__,
+      {:subscribe, {normalize(subscriber), topic_patterns}}
+    )
   end
 
   @doc """
@@ -81,7 +84,13 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
   def subscribe({subscriber, topic_patterns}, opts) do
-    GenServer.call(__MODULE__, {:subscribe_with_opts, {normalize(subscriber), topic_patterns}, opts})
+    normalized_opts = validate_opts!(opts)
+
+    GenServer.call(
+      __MODULE__,
+      {:subscribe_with_opts, {normalize(subscriber), topic_patterns},
+       normalized_opts}
+    )
   end
 
   @doc """
@@ -89,7 +98,10 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe_once(subscriber_with_topic_patterns()) :: :ok
   def subscribe_once({subscriber, topic_patterns}) do
-    GenServer.call(__MODULE__, {:subscribe_n, {normalize(subscriber), topic_patterns}, 1})
+    GenServer.call(
+      __MODULE__,
+      {:subscribe_n, {normalize(subscriber), topic_patterns}, 1}
+    )
   end
 
   @doc """
@@ -97,7 +109,10 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
   def subscribe_n({subscriber, topic_patterns}, count) do
-    GenServer.call(__MODULE__, {:subscribe_n, {normalize(subscriber), topic_patterns}, count})
+    GenServer.call(
+      __MODULE__,
+      {:subscribe_n, {normalize(subscriber), topic_patterns}, count}
+    )
   end
 
   @doc """
@@ -128,7 +143,10 @@ defmodule EventBus.Manager.Subscription do
   Read subscriber opts (priority, guard) directly from ETS.
   No GenServer.call — this is on the notification hot path.
   """
-  @spec fetch_opts(subscriber()) :: %{guard: function() | nil, priority: integer()}
+  @spec fetch_opts(subscriber()) :: %{
+          guard: function() | nil,
+          priority: integer()
+        }
   def fetch_opts(subscriber) do
     case :ets.lookup(@opts_table, subscriber) do
       [{^subscriber, opts}] -> Map.take(opts, [:priority, :guard])
@@ -168,6 +186,28 @@ defmodule EventBus.Manager.Subscription do
     GenServer.call(__MODULE__, {:decrement_limit, subscriber, generation})
   end
 
+  @doc """
+  Batch version of `decrement_limit/2`. Processes all `{subscriber, generation}`
+  pairs in a single GenServer call. Unlimited subscribers (no entry in the
+  limits map) are skipped with a cheap `Map.get` — no per-subscriber overhead.
+  """
+  @spec decrement_limits([{subscriber(), non_neg_integer()}]) :: :ok
+  def decrement_limits([]), do: :ok
+
+  def decrement_limits(subscriber_generations) do
+    GenServer.call(__MODULE__, {:decrement_limits, subscriber_generations})
+  end
+
+  @doc """
+  Return the set of subscribers that currently have active limits
+  (`subscribe_once`/`subscribe_n`). Used by the sweeper to skip per-subscriber
+  work for unlimited subscribers.
+  """
+  @spec limited_subscribers() :: MapSet.t(subscriber())
+  def limited_subscribers do
+    GenServer.call(__MODULE__, :limited_subscribers)
+  end
+
   ###########################################################################
   # DELEGATIONS
   ###########################################################################
@@ -201,7 +241,11 @@ defmodule EventBus.Manager.Subscription do
   end
 
   @doc false
-  def handle_call({:subscribe_n, {subscriber, topic_patterns}, count}, _from, state) do
+  def handle_call(
+        {:subscribe_n, {subscriber, topic_patterns}, count},
+        _from,
+        state
+      ) do
     state =
       state
       |> reset_subscription_state(subscriber)
@@ -213,10 +257,13 @@ defmodule EventBus.Manager.Subscription do
   end
 
   @doc false
-  def handle_call({:subscribe_with_opts, {subscriber, topic_patterns}, opts}, _from, state) do
-    normalized_opts = normalize_opts!(opts)
+  def handle_call(
+        {:subscribe_with_opts, {subscriber, topic_patterns}, validated_opts},
+        _from,
+        state
+      ) do
     state = reset_subscription_state(state, subscriber)
-    write_opts_to_ets(subscriber, normalized_opts, state)
+    write_opts_to_ets(subscriber, validated_opts, state)
     @backend.subscribe({subscriber, topic_patterns})
     {:reply, :ok, state}
   end
@@ -229,7 +276,11 @@ defmodule EventBus.Manager.Subscription do
   end
 
   @doc false
-  def handle_call({:prepare_subscribers_for_dispatch, subscribers}, _from, state) do
+  def handle_call(
+        {:prepare_subscribers_for_dispatch, subscribers},
+        _from,
+        state
+      ) do
     {admitted, snapshot, state} = do_prepare_subscribers(subscribers, state)
     {:reply, {admitted, snapshot}, state}
   end
@@ -251,11 +302,29 @@ defmodule EventBus.Manager.Subscription do
     {:reply, :ok, maybe_decrement_limit(state, subscriber, generation)}
   end
 
-  defp normalize_opts!(opts) when is_list(opts) do
+  @doc false
+  def handle_call({:decrement_limits, subscriber_generations}, _from, state) do
+    state =
+      Enum.reduce(subscriber_generations, state, fn {subscriber, generation},
+                                                    acc ->
+        maybe_decrement_limit(acc, subscriber, generation)
+      end)
+
+    {:reply, :ok, state}
+  end
+
+  @doc false
+  def handle_call(:limited_subscribers, _from, state) do
+    limited = state.limits |> Map.keys() |> MapSet.new()
+    {:reply, limited, state}
+  end
+
+  @doc false
+  defp validate_opts!(opts) when is_list(opts) do
     priority = Keyword.get(opts, :priority, 0)
     guard = Keyword.get(opts, :guard)
 
-    if !is_integer(priority) do
+    if not is_integer(priority) do
       raise ArgumentError, ":priority must be an integer"
     end
 
@@ -269,7 +338,11 @@ defmodule EventBus.Manager.Subscription do
   # Write opts + generation to ETS for lock-free reads on the hot path.
   defp write_opts_to_ets(subscriber, opts, state) do
     generation = Map.get(state.generations, subscriber, 0)
-    :ets.insert(@opts_table, {subscriber, Map.put(opts, :generation, generation)})
+
+    :ets.insert(
+      @opts_table,
+      {subscriber, Map.put(opts, :generation, generation)}
+    )
   end
 
   defp reset_subscription_state(state, subscriber) do
@@ -287,17 +360,24 @@ defmodule EventBus.Manager.Subscription do
     %{state | generations: Map.put(state.generations, subscriber, generation)}
   end
 
-  defp put_limit(state, subscriber, count) when is_integer(count) and count > 0 do
-    generation = Map.fetch!(state.generations, subscriber)
+  defp put_limit(state, subscriber, count)
+       when is_integer(count) and count > 0 do
+    generation = Map.get(state.generations, subscriber, 0)
     limit = %{generation: generation, remaining: count, in_flight: 0}
     %{state | limits: Map.put(state.limits, subscriber, limit)}
   end
 
   defp maybe_decrement_limit(state, subscriber, generation) do
     case Map.get(state.limits, subscriber) do
-      %{generation: ^generation, remaining: remaining, in_flight: in_flight} = limit
+      %{generation: ^generation, remaining: remaining, in_flight: in_flight} =
+          limit
       when in_flight > 0 ->
-        updated_limit = %{limit | remaining: remaining - 1, in_flight: in_flight - 1}
+        updated_limit = %{
+          limit
+          | remaining: remaining - 1,
+            in_flight: in_flight - 1
+        }
+
         maybe_finalize_limit(state, subscriber, updated_limit)
 
       _ ->
@@ -307,19 +387,25 @@ defmodule EventBus.Manager.Subscription do
 
   defp do_prepare_subscribers(subscribers, state) do
     {admitted, snapshot, limits} =
-      Enum.reduce(subscribers, {[], %{}, state.limits}, fn subscriber, {admitted, snapshot, limits} ->
+      Enum.reduce(subscribers, {[], %{}, state.limits}, fn subscriber,
+                                                           {admitted, snapshot,
+                                                            limits} ->
         case Map.get(limits, subscriber) do
           nil ->
             generation = Map.get(state.generations, subscriber, 0)
-            {[subscriber | admitted], Map.put(snapshot, subscriber, generation), limits}
 
-          %{generation: generation, remaining: remaining, in_flight: in_flight} = limit
+            {[subscriber | admitted], Map.put(snapshot, subscriber, generation),
+             limits}
+
+          %{generation: generation, remaining: remaining, in_flight: in_flight} =
+              limit
           when remaining > in_flight ->
             updated_limit = %{limit | in_flight: in_flight + 1}
 
             {[
                subscriber | admitted
-             ], Map.put(snapshot, subscriber, generation), Map.put(limits, subscriber, updated_limit)}
+             ], Map.put(snapshot, subscriber, generation),
+             Map.put(limits, subscriber, updated_limit)}
 
           _ ->
             {admitted, snapshot, limits}

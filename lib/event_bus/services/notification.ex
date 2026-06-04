@@ -23,15 +23,21 @@ defmodule EventBus.Service.Notification do
     if subscribers == [] do
       warn_missing_topic_subscription(topic)
     else
-      {admitted_subscribers, snapshot} = SubscriptionManager.prepare_subscribers_for_dispatch(subscribers)
+      {admitted_subscribers, snapshot} =
+        SubscriptionManager.prepare_subscribers_for_dispatch(subscribers)
 
       if admitted_subscribers == [] do
-        Debug.log("notify_dropped topic=#{inspect(topic)} id=#{inspect(id)} reason=no_admitted_subscribers")
+        Debug.log(
+          "notify_dropped topic=#{inspect(topic)} id=#{inspect(id)} reason=no_admitted_subscribers"
+        )
       else
         Debug.log("notify topic=#{inspect(topic)} id=#{inspect(id)}")
 
         :ok = StoreService.create(event)
-        :ok = ObservationService.save({topic, id}, {admitted_subscribers, [], []})
+
+        :ok =
+          ObservationService.save({topic, id}, {admitted_subscribers, [], []})
+
         :ok = ObservationService.save_snapshot({topic, id}, snapshot)
 
         start_time = System.monotonic_time()
@@ -49,7 +55,11 @@ defmodule EventBus.Service.Notification do
         Telemetry.execute(
           [:event_bus, :notify, :stop],
           %{duration: duration},
-          %{topic: topic, event_id: id, subscriber_count: length(admitted_subscribers)}
+          %{
+            topic: topic,
+            event_id: id,
+            subscriber_count: length(admitted_subscribers)
+          }
         )
       end
     end
@@ -58,7 +68,11 @@ defmodule EventBus.Service.Notification do
   end
 
   @spec notify_subscribers(subscribers(), event(), integer()) :: :ok
-  defp notify_subscribers(subscribers, %Event{id: id, topic: topic} = event, start_time) do
+  defp notify_subscribers(
+         subscribers,
+         %Event{id: id, topic: topic} = event,
+         start_time
+       ) do
     sorted = sort_by_priority(subscribers)
     dispatch_in_order(sorted, event, {topic, id}, start_time)
     :ok
@@ -78,13 +92,20 @@ defmodule EventBus.Service.Notification do
 
   defp skip_remaining(subscribers, {topic, id}) do
     Enum.each(subscribers, fn sub_key ->
-      Debug.log("skipped_by_cancel topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}")
+      Debug.log(
+        "skipped_by_cancel topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}"
+      )
+
       ObservationService.mark_as_skipped({sub_key, {topic, id}})
     end)
   end
 
   defp sort_by_priority(subscribers) do
-    Enum.sort_by(subscribers, fn sub -> -SubscriptionManager.fetch_opts(sub).priority end, &<=/2)
+    Enum.sort_by(
+      subscribers,
+      fn sub -> -SubscriptionManager.fetch_opts(sub).priority end,
+      &<=/2
+    )
   end
 
   defp dispatch_subscriber(sub_key, event, {topic, id}, start_time) do
@@ -102,17 +123,25 @@ defmodule EventBus.Service.Notification do
 
   defp evaluate_guard(nil, _event, _sub_key, _topic, _id), do: :pass
 
-  defp evaluate_guard(guard, event, sub_key, topic, id) when is_function(guard, 1) do
+  defp evaluate_guard(guard, event, sub_key, topic, id)
+       when is_function(guard, 1) do
     if guard.(event) do
       :pass
     else
-      Debug.log("guard_skipped topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}")
+      Debug.log(
+        "guard_skipped topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}"
+      )
+
       :skip
     end
   rescue
     error ->
       stacktrace = __STACKTRACE__
-      Logger.error("Guard for #{inspect(sub_key)} raised an error!\n#{Exception.format(:error, error, stacktrace)}")
+
+      Logger.error(
+        "Guard for #{inspect(sub_key)} raised an error!\n#{Exception.format(:error, error, stacktrace)}"
+      )
+
       :skip
   end
 
@@ -120,7 +149,10 @@ defmodule EventBus.Service.Notification do
   # Config-less subscribers have config=nil; we call process({topic, id}) for those
   # and process({config, topic, id}) for configured subscribers.
   defp do_dispatch({subscriber, config} = sub_key, {topic, id}, start_time) do
-    Debug.log("dispatch topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}")
+    Debug.log(
+      "dispatch topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}"
+    )
+
     Debug.record_dispatch(sub_key, topic, id)
 
     call_args = if is_nil(config), do: {topic, id}, else: {config, topic, id}
@@ -128,7 +160,11 @@ defmodule EventBus.Service.Notification do
     case subscriber.process(call_args) do
       {:cancel, reason} ->
         ObservationService.mark_as_completed({sub_key, {topic, id}})
-        Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}")
+
+        Debug.log(
+          "cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}"
+        )
+
         :cancelled
 
       _ ->
@@ -138,7 +174,10 @@ defmodule EventBus.Service.Notification do
     error ->
       case error do
         %CancelEvent{reason: reason} ->
-          Debug.log("cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}")
+          Debug.log(
+            "cancelled topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)} reason=#{inspect(reason)}"
+          )
+
           ObservationService.mark_as_skipped({sub_key, {topic, id}})
           :cancelled
 
@@ -146,13 +185,29 @@ defmodule EventBus.Service.Notification do
           stacktrace = __STACKTRACE__
           duration = System.monotonic_time() - start_time
           log_error(subscriber, error, stacktrace)
-          emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace)
+
+          emit_exception_telemetry(
+            subscriber,
+            topic,
+            id,
+            duration,
+            error,
+            stacktrace
+          )
+
           ObservationService.mark_as_skipped({sub_key, {topic, id}})
           :ok
       end
   end
 
-  defp emit_exception_telemetry(subscriber, topic, id, duration, error, stacktrace) do
+  defp emit_exception_telemetry(
+         subscriber,
+         topic,
+         id,
+         duration,
+         error,
+         stacktrace
+       ) do
     Telemetry.execute(
       [:event_bus, :notify, :exception],
       %{duration: duration},

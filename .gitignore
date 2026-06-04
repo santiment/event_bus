@@ -27,3 +27,7 @@ event_bus-*.tar
 
 # Misc.
 .DS_Store
+.claude/
+.tool-versions
+FUTURE_FEATURES_PLAN.md
+PLAN.md
