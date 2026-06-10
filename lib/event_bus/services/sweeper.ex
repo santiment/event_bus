@@ -123,5 +123,19 @@ defmodule EventBus.Service.Sweeper do
 
   defp resolve_strategy(:bulk_smart), do: EventBus.SweepStrategy.BulkSmart
   defp resolve_strategy(:detailed), do: EventBus.SweepStrategy.Detailed
-  defp resolve_strategy(module) when is_atom(module), do: module
+
+  defp resolve_strategy(module) when is_atom(module) do
+    # Fail fast (at Sweeper boot / manual sweep call) on a typo'd shorthand
+    # or a module that does not implement the behaviour, instead of crashing
+    # mid-sweep with an opaque UndefinedFunctionError.
+    if Code.ensure_loaded?(module) and function_exported?(module, :init, 0) and
+         function_exported?(module, :handle_batch, 2) and
+         function_exported?(module, :telemetry_metadata, 1) do
+      module
+    else
+      raise ArgumentError,
+            "invalid :sweep_strategy #{inspect(module)} — expected :bulk_smart, " <>
+              ":detailed, or a module implementing the EventBus.SweepStrategy behaviour"
+    end
+  end
 end

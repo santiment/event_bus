@@ -44,9 +44,9 @@ defmodule EventBus.Service.Subscription do
   def subscribe({subscriber, topics}) do
     subscriber = normalize(subscriber)
 
-    Debug.log(
+    Debug.log(fn ->
       "subscribe subscriber=#{inspect(subscriber)} patterns=#{inspect(topics)}"
-    )
+    end)
 
     :ets.insert(@subscribers_table, {subscriber, topics})
     rebuild_topic_map_for_subscriber(subscriber, topics)
@@ -58,7 +58,7 @@ defmodule EventBus.Service.Subscription do
   @spec unsubscribe(subscriber()) :: :ok
   def unsubscribe(subscriber) do
     subscriber = normalize(subscriber)
-    Debug.log("unsubscribe subscriber=#{inspect(subscriber)}")
+    Debug.log(fn -> "unsubscribe subscriber=#{inspect(subscriber)}" end)
     :ets.delete(@subscribers_table, subscriber)
     remove_subscriber_from_all_topics(subscriber)
 
@@ -88,42 +88,77 @@ defmodule EventBus.Service.Subscription do
 
   @spec subscribers(topic()) :: subscribers()
   def subscribers(topic) do
+    topic
+    |> subscribers_with_opts()
+    |> Enum.map(fn {subscriber, _opts} -> subscriber end)
+  end
+
+  @doc """
+  Per-topic subscriber list with opts attached, pre-sorted by priority
+  (highest first) at subscribe/register time. This is the notification
+  hot-path read: one ETS lookup, no per-subscriber lookups, no sorting.
+  """
+  @spec subscribers_with_opts(topic()) :: [{subscriber(), map()}]
+  def subscribers_with_opts(topic) do
     case :ets.lookup(@topic_map_table, topic) do
-      [{^topic, subs}] -> subs
+      [{^topic, pairs}] -> pairs
       [] -> []
     end
   end
 
-  # Recompute which topics this subscriber matches and update topic_map entries
+  # Recompute which topics this subscriber matches and update topic_map
+  # entries. All topic-map writes are serialized through the subscription
+  # manager GenServer, so the read-modify-write here is race-free. Opts must
+  # already be written to the opts table when this runs.
   defp rebuild_topic_map_for_subscriber(subscriber, patterns) do
-    :ets.tab2list(@topic_map_table)
-    |> Enum.each(fn {topic, topic_subs} ->
-      topic_subs = List.delete(topic_subs, subscriber)
+    opts = fetch_opts(subscriber)
 
-      new_subs =
+    :ets.tab2list(@topic_map_table)
+    |> Enum.each(fn {topic, pairs} ->
+      pairs = List.keydelete(pairs, subscriber, 0)
+
+      new_pairs =
         if RegexUtil.superset?(patterns, topic) do
-          [subscriber | topic_subs]
+          # Prepend + stable sort: equal priorities keep newest-first order,
+          # matching the previous sort-at-dispatch behavior.
+          sort_by_priority([{subscriber, opts} | pairs])
         else
-          topic_subs
+          pairs
         end
 
-      :ets.insert(@topic_map_table, {topic, new_subs})
+      :ets.insert(@topic_map_table, {topic, new_pairs})
     end)
   end
 
   defp remove_subscriber_from_all_topics(subscriber) do
     :ets.tab2list(@topic_map_table)
-    |> Enum.each(fn {topic, topic_subs} ->
-      new_subs = List.delete(topic_subs, subscriber)
-      :ets.insert(@topic_map_table, {topic, new_subs})
+    |> Enum.each(fn {topic, pairs} ->
+      new_pairs = List.keydelete(pairs, subscriber, 0)
+      :ets.insert(@topic_map_table, {topic, new_pairs})
     end)
   end
 
   defp compute_topic_subscribers(topic) do
     :ets.tab2list(@subscribers_table)
     |> Enum.reduce([], fn {subscriber, patterns}, acc ->
-      if RegexUtil.superset?(patterns, topic), do: [subscriber | acc], else: acc
+      if RegexUtil.superset?(patterns, topic) do
+        [{subscriber, fetch_opts(subscriber)} | acc]
+      else
+        acc
+      end
     end)
+    |> sort_by_priority()
+  end
+
+  defp sort_by_priority(pairs) do
+    Enum.sort_by(pairs, fn {_subscriber, opts} -> opts.priority end, :desc)
+  end
+
+  defp fetch_opts(subscriber) do
+    case :ets.lookup(@opts_table, subscriber) do
+      [{^subscriber, opts}] -> Map.take(opts, [:priority, :guard])
+      _ -> %{priority: 0, guard: nil}
+    end
   end
 
   defp normalize(subscriber) when is_atom(subscriber), do: {subscriber, nil}

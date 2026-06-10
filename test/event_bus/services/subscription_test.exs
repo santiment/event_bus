@@ -171,6 +171,24 @@ defmodule EventBus.Service.SubscriptionTest do
     assert opts == %{priority: 0, guard: nil}
   end
 
+  test "topic map is pre-sorted by priority and re-sorted on resubscribe" do
+    EventBus.subscribe({{InputLogger, %{}}, ["metrics_received"]}, priority: 1)
+
+    EventBus.subscribe({AnotherCalculator, ["metrics_received"]}, priority: 5)
+
+    assert [{AnotherCalculator, nil}, {InputLogger, %{}}] ==
+             Subscription.subscribers(:metrics_received)
+
+    pairs = Subscription.subscribers_with_opts(:metrics_received)
+    assert [{{AnotherCalculator, nil}, %{priority: 5}}, _] = pairs
+
+    # Resubscribe with a new priority must re-sort the cached list.
+    EventBus.subscribe({AnotherCalculator, ["metrics_received"]}, priority: -1)
+
+    assert [{InputLogger, %{}}, {AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_received)
+  end
+
   test "subscribe with non-integer priority raises ArgumentError" do
     assert_raise ArgumentError, ":priority must be an integer", fn ->
       EventBus.subscribe({{InputLogger, %{}}, [".*"]}, priority: "high")

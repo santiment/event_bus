@@ -11,8 +11,14 @@ defmodule EventBus.Application do
   alias EventBus.Service.Subscription, as: SubscriptionService
   alias EventBus.Service.Sweeper, as: SweeperService
   alias EventBus.Service.Topic, as: TopicService
+  alias EventBus.Util.MonotonicTime
 
   def start(_type, _args) do
+    # Cache the monotonic offset before any event can be created, so
+    # concurrent first callers of MonotonicTime.now/0 cannot race to compute
+    # slightly different offsets.
+    MonotonicTime.init()
+
     Debug.setup_table()
     StoreService.setup_table()
     ObservationService.setup_table()

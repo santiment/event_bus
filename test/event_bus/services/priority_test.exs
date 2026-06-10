@@ -73,6 +73,13 @@ defmodule EventBus.Service.PriorityTest do
     end
   end
 
+  defmodule OnceAfterCancel do
+    def process({topic, id}) do
+      send(:priority_test, {:processed, :once, id})
+      EventBus.mark_as_completed({__MODULE__, {topic, id}})
+    end
+  end
+
   defp notify_and_wait(id) do
     event = %Event{id: id, topic: @topic, data: %{}}
     EventBus.notify(event)
@@ -136,6 +143,37 @@ defmodule EventBus.Service.PriorityTest do
       Process.sleep(100)
       assert EventBus.fetch_event({@topic, "cancel-return-1"}) == nil
     end)
+  end
+
+  test "cancellation does not spend a limited subscriber's budget" do
+    Process.register(self(), :priority_test)
+
+    # High-priority canceller skips every event before it reaches OnceAfterCancel.
+    EventBus.subscribe({CancellingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe_once({OnceAfterCancel, ["priority_test_topic"]})
+
+    notify_and_wait("limited-cancel-1")
+
+    # The once-subscriber never received the event, so it must still be
+    # subscribed — a pre-delivery cancel must not burn the once budget.
+    assert_received {:processed, :canceller}
+    refute_received {:processed, :once, _}
+
+    assert {{OnceAfterCancel, nil}, _} =
+             List.keyfind(EventBus.subscribers(), {OnceAfterCancel, nil}, 0)
+
+    # Remove the canceller; the once-subscriber should now actually receive its
+    # one event and only then auto-unsubscribe.
+    EventBus.unsubscribe(CancellingSubscriber)
+
+    notify_and_wait("limited-cancel-2")
+    assert_received {:processed, :once, "limited-cancel-2"}
+
+    Process.sleep(100)
+    refute List.keyfind(EventBus.subscribers(), {OnceAfterCancel, nil}, 0)
   end
 
   test "return-value cancellation cleans up even without explicit completion" do

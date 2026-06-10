@@ -12,10 +12,10 @@ defmodule EventBus.Telemetry do
       * Measurements: `%{duration: integer()}`
       * Metadata: `%{topic: atom(), event_id: term(), subscriber_count: integer()}`
 
-    * `[:event_bus, :notify, :exception]` — when a subscriber raises
+    * `[:event_bus, :notify, :exception]` — when a subscriber raises, throws, or exits
       * Measurements: `%{duration: integer()}`
       * Metadata: `%{topic: atom(), event_id: term(), subscriber: term(),
-                     kind: :error, reason: term(), stacktrace: list()}`
+                     kind: :error | :exit | :throw, reason: term(), stacktrace: list()}`
 
     * `[:event_bus, :observation, :complete]` — when all subscribers finish and event is cleaned up
       * Measurements: `%{subscriber_count: integer()}`

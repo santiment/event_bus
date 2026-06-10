@@ -91,6 +91,25 @@ defmodule EventBus.Service.Observation do
   end
 
   @doc false
+  # Terminal transition for a subscriber that never received the event —
+  # rejected by its guard or skipped by an upstream cancellation. Marks the
+  # subscriber as skipped and releases any limited-subscription in-flight
+  # reservation WITHOUT spending the delivery budget, so subscribe_once/
+  # subscribe_n are not consumed by an event the subscriber never processed.
+  @spec discard_undelivered(subscriber_with_event_ref()) :: :ok
+  def discard_undelivered({subscriber, {topic, id} = event_shadow}) do
+    case cas_status({topic, id, subscriber}, :pending, :skipped) do
+      1 ->
+        Debug.log_terminal("skipped", subscriber, topic, id)
+        release_in_flight(subscriber, event_shadow)
+        check_completion({topic, id})
+
+      0 ->
+        :ok
+    end
+  end
+
+  @doc false
   @spec fetch(event_shadow()) ::
           {subscribers(), subscribers(), subscribers()} | nil
   def fetch({topic, id}) do
@@ -114,9 +133,10 @@ defmodule EventBus.Service.Observation do
     count = length(subscribers)
     :ets.insert(@table, {{topic, id}, subscribers, count})
 
-    Enum.each(subscribers, fn sub ->
-      :ets.insert(@status_table, {{topic, id, sub}, :pending})
-    end)
+    status_rows =
+      Enum.map(subscribers, fn sub -> {{topic, id, sub}, :pending} end)
+
+    :ets.insert(@status_table, status_rows)
 
     :ok
   end
@@ -150,7 +170,7 @@ defmodule EventBus.Service.Observation do
       [{{^topic, ^id}, subscribers, _}] ->
         {completers, skippers} = collect_terminal(topic, id, subscribers)
 
-        Debug.log("cleaned topic=#{inspect(topic)} id=#{inspect(id)}")
+        Debug.log(fn -> "cleaned topic=#{inspect(topic)} id=#{inspect(id)}" end)
 
         Telemetry.execute(
           [:event_bus, :observation, :complete],
@@ -190,19 +210,24 @@ defmodule EventBus.Service.Observation do
           | :not_found
   # Note: not fully atomic — between the lookup and the delete, on_complete
   # could fire concurrently if another process completes the last subscriber.
-  # This can cause benign double-deletes (ETS delete on missing key is a no-op)
-  # and a redundant batch_decrement_limits call (generation check makes it safe).
-  # Acceptable because the sweeper runs infrequently relative to event throughput.
+  # This can cause benign double-deletes (ETS delete on missing key is a no-op).
+  # Budget decrements are protected: each pending status is CAS-claimed
+  # (:pending -> :skipped) before being counted, so a concurrent terminal
+  # transition for the same subscriber can never double-spend the budget.
   def force_expire({topic, id}) do
     case :ets.lookup(@table, {topic, id}) do
       [{{^topic, ^id}, subscribers, _}] ->
         {completers, skippers} = collect_terminal(topic, id, subscribers)
         pending = pending_subscribers(subscribers, completers, skippers)
 
-        # One GenServer call for all pending subscribers in this event.
-        batch_decrement_limits(pending, {topic, id})
+        # CAS-claim each pending status so a concurrent mark_as_completed/
+        # mark_as_skipped cannot decrement the same delivery a second time.
+        claimed = claim_pending(topic, id, pending)
 
-        Debug.log("expired topic=#{inspect(topic)} id=#{inspect(id)}")
+        # One GenServer call for all claimed subscribers in this event.
+        batch_decrement_limits(claimed, {topic, id})
+
+        Debug.log(fn -> "expired topic=#{inspect(topic)} id=#{inspect(id)}" end)
 
         delete_event_entries(topic, id, subscribers)
 
@@ -282,29 +307,42 @@ defmodule EventBus.Service.Observation do
     end)
   end
 
-  # Only look up status/snapshot for subscribers that are in the limited set.
+  # Only touch status/snapshot for subscribers that are in the limited set.
+  # The :pending status is CAS-claimed (-> :skipped) so a concurrent terminal
+  # transition for the same delivery cannot decrement the budget twice.
   defp collect_limited_decrements(topic, id, subscribers, limited_set) do
     Enum.flat_map(subscribers, fn sub ->
-      if MapSet.member?(limited_set, sub) do
-        case :ets.lookup(@status_table, {topic, id, sub}) do
-          [{_, :pending}] -> [{sub, snapshot_generation({topic, id}, sub)}]
-          _ -> []
-        end
+      if MapSet.member?(limited_set, sub) and
+           cas_status({topic, id, sub}, :pending, :skipped) == 1 do
+        [{sub, snapshot_generation({topic, id}, sub)}]
       else
         []
       end
     end)
   end
 
+  # CAS-claim pending statuses (:pending -> :skipped); returns the subset of
+  # subscribers actually claimed. Losers of the race are already terminal and
+  # have spent (or released) their budget through their own transition.
+  defp claim_pending(topic, id, pending) do
+    Enum.filter(pending, fn sub ->
+      cas_status({topic, id, sub}, :pending, :skipped) == 1
+    end)
+  end
+
   defp batch_decrement_limits([], _event_shadow), do: :ok
 
   defp batch_decrement_limits(pending, {topic, id}) do
-    subscriber_generations =
-      Enum.map(pending, fn sub ->
-        {sub, snapshot_generation({topic, id}, sub)}
-      end)
+    if SubscriptionManager.any_limited?() do
+      subscriber_generations =
+        Enum.map(pending, fn sub ->
+          {sub, snapshot_generation({topic, id}, sub)}
+        end)
 
-    SubscriptionManager.decrement_limits(subscriber_generations)
+      SubscriptionManager.decrement_limits(subscriber_generations)
+    else
+      :ok
+    end
   end
 
   # Reconstruct completers/skippers lists from per-subscriber status entries.
@@ -320,9 +358,28 @@ defmodule EventBus.Service.Observation do
     end)
   end
 
+  # Spend one unit of a limited subscriber's delivery budget after a real
+  # terminal (completed, or skipped after delivery). Gated on any_limited? so
+  # the common all-unlimited case makes zero GenServer calls: when no limits
+  # exist globally, this subscriber cannot be limited, so the call is a no-op.
   defp decrement_limit(subscriber, event_shadow) do
-    generation = snapshot_generation(event_shadow, subscriber)
-    SubscriptionManager.decrement_limit(subscriber, generation)
+    if SubscriptionManager.any_limited?() do
+      generation = snapshot_generation(event_shadow, subscriber)
+      SubscriptionManager.decrement_limit(subscriber, generation)
+    else
+      :ok
+    end
+  end
+
+  # Release an in-flight reservation for an undelivered event (see
+  # discard_undelivered/1). Gated identically to decrement_limit/2.
+  defp release_in_flight(subscriber, event_shadow) do
+    if SubscriptionManager.any_limited?() do
+      generation = snapshot_generation(event_shadow, subscriber)
+      SubscriptionManager.release_in_flight(subscriber, generation)
+    else
+      :ok
+    end
   end
 
   defp pending_subscribers(subscribers, completers, skippers) do

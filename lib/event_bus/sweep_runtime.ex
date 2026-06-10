@@ -77,7 +77,13 @@ defmodule EventBus.SweepRuntime do
             expired_per_topic: %{optional(atom()) => non_neg_integer()}
           }
   def expire_batch(event_shadows) do
-    limited_set = SubscriptionManager.limited_subscribers()
+    # Skip the manager round-trip entirely when no limited subscriptions exist.
+    limited_set =
+      if SubscriptionManager.any_limited?() do
+        SubscriptionManager.limited_subscribers()
+      else
+        MapSet.new()
+      end
 
     {count, topic_counts} =
       ObservationService.expire_batch(event_shadows, limited_set)

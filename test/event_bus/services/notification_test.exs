@@ -102,6 +102,44 @@ defmodule EventBus.Service.NotificationTest do
            )
   end
 
+  defmodule Thrower do
+    def process({_topic, _id}), do: throw(:kaboom)
+  end
+
+  defmodule Exiter do
+    def process({_topic, _id}), do: exit(:kaboom)
+  end
+
+  defmodule AfterCrash do
+    def process({topic, id}) do
+      send(:notification_crash_test, {:processed, id})
+      EventBus.mark_as_completed({__MODULE__, {topic, id}})
+    end
+  end
+
+  test "throw/exit from a subscriber does not kill the dispatch chain" do
+    Process.register(self(), :notification_crash_test)
+    EventBus.register_topic(:metrics_received)
+
+    # Higher priorities run first — both crash before AfterCrash runs.
+    EventBus.subscribe({Thrower, ["metrics_received$"]}, priority: 10)
+    EventBus.subscribe({Exiter, ["metrics_received$"]}, priority: 5)
+    EventBus.subscribe({AfterCrash, ["metrics_received$"]})
+
+    logs =
+      capture_log(fn ->
+        Notification.notify(@event)
+        assert_received {:processed, "E1"}
+
+        # Crashed subscribers are marked skipped, AfterCrash completed —
+        # the event must be fully cleaned up, not stranded as pending.
+        assert is_nil(EventBus.fetch_event({@topic, "E1"}))
+      end)
+
+    assert logs =~ "Thrower.process/1 raised an error!"
+    assert logs =~ "Exiter.process/1 raised an error!"
+  end
+
   test "notify for unregistered topic warns differently" do
     event = %Event{
       id: "E2",

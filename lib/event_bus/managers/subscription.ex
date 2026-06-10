@@ -55,6 +55,12 @@ defmodule EventBus.Manager.Subscription do
 
   @doc false
   def init(_opts) do
+    # Atomic gate mirroring map_size(limits). Lets the notification and
+    # completion hot paths skip GenServer calls entirely when no limited
+    # subscriptions exist (the common case). Read lock-free via any_limited?/0.
+    ref = :counters.new(1, [:atomics])
+    :persistent_term.put({__MODULE__, :limited_gate}, ref)
+
     # generations: %{subscriber => integer} — see "Generations" above
     # limits: %{subscriber => %{generation, remaining, in_flight}} — see "Limits" above
     {:ok, %{limits: %{}, generations: %{}}}
@@ -199,6 +205,32 @@ defmodule EventBus.Manager.Subscription do
   end
 
   @doc """
+  Release a limited subscriber's in-flight reservation WITHOUT spending its
+  delivery budget. Used when an admitted event is skipped before it reaches
+  the subscriber's `process/1` (guard rejection or upstream cancellation), so
+  `subscribe_once`/`subscribe_n` are not consumed by an undelivered event.
+  The generation argument must match the subscriber's current generation;
+  stale releases from a prior subscription are ignored.
+  """
+  @spec release_in_flight(subscriber(), non_neg_integer()) :: :ok
+  def release_in_flight(subscriber, generation) do
+    GenServer.call(__MODULE__, {:release_in_flight, subscriber, generation})
+  end
+
+  @doc """
+  Return `true` if any subscriber currently has an active limit
+  (`subscribe_once`/`subscribe_n`). Lock-free atomic read — safe to call on
+  the notification and completion hot paths to skip GenServer round-trips.
+  """
+  @spec any_limited?() :: boolean()
+  def any_limited? do
+    case :persistent_term.get({__MODULE__, :limited_gate}, nil) do
+      nil -> false
+      ref -> :counters.get(ref, 1) > 0
+    end
+  end
+
+  @doc """
   Return the set of subscribers that currently have active limits
   (`subscribe_once`/`subscribe_n`). Used by the sweeper to skip per-subscriber
   work for unlimited subscribers.
@@ -228,6 +260,15 @@ defmodule EventBus.Manager.Subscription do
     to: @backend,
     as: :subscribers
 
+  @doc """
+  Fetch subscribers of the topic with their opts, pre-sorted by priority
+  (highest first). Single lock-free ETS read — the notification hot path.
+  """
+  @spec subscribers_with_opts(topic()) :: [{subscriber(), map()}]
+  defdelegate subscribers_with_opts(topic),
+    to: @backend,
+    as: :subscribers_with_opts
+
   ###########################################################################
   # PRIVATE API
   ###########################################################################
@@ -235,9 +276,9 @@ defmodule EventBus.Manager.Subscription do
   @doc false
   def handle_call({:subscribe, {subscriber, topic_patterns}}, _from, state) do
     state = reset_subscription_state(state, subscriber)
-    write_opts_to_ets(subscriber, %{priority: 0, guard: nil}, state)
+    write_opts_to_ets(subscriber, %{priority: 0, guard: nil})
     @backend.subscribe({subscriber, topic_patterns})
-    {:reply, :ok, state}
+    {:reply, :ok, sync_limited_gate(state)}
   end
 
   @doc false
@@ -250,8 +291,12 @@ defmodule EventBus.Manager.Subscription do
       state
       |> reset_subscription_state(subscriber)
       |> put_limit(subscriber, count)
+      # Sync the gate BEFORE the subscriber becomes visible in the topic map.
+      # Otherwise a concurrent notify could see the limited subscriber while
+      # any_limited?/0 still reads false and bypass admission accounting.
+      |> sync_limited_gate()
 
-    write_opts_to_ets(subscriber, %{priority: 0, guard: nil}, state)
+    write_opts_to_ets(subscriber, %{priority: 0, guard: nil})
     @backend.subscribe({subscriber, topic_patterns})
     {:reply, :ok, state}
   end
@@ -263,16 +308,18 @@ defmodule EventBus.Manager.Subscription do
         state
       ) do
     state = reset_subscription_state(state, subscriber)
-    write_opts_to_ets(subscriber, validated_opts, state)
+    write_opts_to_ets(subscriber, validated_opts)
     @backend.subscribe({subscriber, topic_patterns})
-    {:reply, :ok, state}
+    {:reply, :ok, sync_limited_gate(state)}
   end
 
   @doc false
   def handle_call({:unsubscribe, subscriber}, _from, state) do
     @backend.unsubscribe(subscriber)
     :ets.delete(@opts_table, subscriber)
-    {:reply, :ok, clear_subscription_state(state, subscriber)}
+
+    {:reply, :ok,
+     sync_limited_gate(clear_subscription_state(state, subscriber))}
   end
 
   @doc false
@@ -299,7 +346,8 @@ defmodule EventBus.Manager.Subscription do
 
   @doc false
   def handle_call({:decrement_limit, subscriber, generation}, _from, state) do
-    {:reply, :ok, maybe_decrement_limit(state, subscriber, generation)}
+    state = maybe_decrement_limit(state, subscriber, generation)
+    {:reply, :ok, sync_limited_gate(state)}
   end
 
   @doc false
@@ -310,7 +358,13 @@ defmodule EventBus.Manager.Subscription do
         maybe_decrement_limit(acc, subscriber, generation)
       end)
 
-    {:reply, :ok, state}
+    {:reply, :ok, sync_limited_gate(state)}
+  end
+
+  @doc false
+  def handle_call({:release_in_flight, subscriber, generation}, _from, state) do
+    state = maybe_release_in_flight(state, subscriber, generation)
+    {:reply, :ok, sync_limited_gate(state)}
   end
 
   @doc false
@@ -335,14 +389,18 @@ defmodule EventBus.Manager.Subscription do
     %{priority: priority, guard: guard}
   end
 
-  # Write opts + generation to ETS for lock-free reads on the hot path.
-  defp write_opts_to_ets(subscriber, opts, state) do
-    generation = Map.get(state.generations, subscriber, 0)
+  # Write opts (priority, guard) to ETS for lock-free reads on the hot path.
+  defp write_opts_to_ets(subscriber, opts) do
+    :ets.insert(@opts_table, {subscriber, opts})
+  end
 
-    :ets.insert(
-      @opts_table,
-      {subscriber, Map.put(opts, :generation, generation)}
-    )
+  # Mirror map_size(limits) into the atomic gate so the hot paths can decide,
+  # lock-free, whether any GenServer round-trip is needed. Called after every
+  # state transition that can add or remove a limit entry.
+  defp sync_limited_gate(state) do
+    ref = :persistent_term.get({__MODULE__, :limited_gate})
+    :counters.put(ref, 1, map_size(state.limits))
+    state
   end
 
   defp reset_subscription_state(state, subscriber) do
@@ -378,6 +436,21 @@ defmodule EventBus.Manager.Subscription do
             in_flight: in_flight - 1
         }
 
+        maybe_finalize_limit(state, subscriber, updated_limit)
+
+      _ ->
+        state
+    end
+  end
+
+  # Release an in-flight reservation without touching the remaining budget.
+  # A subscriber is only admitted while remaining > in_flight, so at release
+  # time remaining >= 1 and maybe_finalize_limit never auto-unsubscribes here.
+  defp maybe_release_in_flight(state, subscriber, generation) do
+    case Map.get(state.limits, subscriber) do
+      %{generation: ^generation, in_flight: in_flight} = limit
+      when in_flight > 0 ->
+        updated_limit = %{limit | in_flight: in_flight - 1}
         maybe_finalize_limit(state, subscriber, updated_limit)
 
       _ ->

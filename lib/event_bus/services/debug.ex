@@ -87,8 +87,18 @@ defmodule EventBus.Service.Debug do
   end
 
   @doc false
-  @spec log(String.t()) :: :ok
-  def log(message) do
+  # Accepts a zero-arity fun so hot-path callers can defer string
+  # interpolation (inspect/2 etc.) until debug is actually enabled.
+  @spec log((-> String.t()) | String.t()) :: :ok
+  def log(message_fun) when is_function(message_fun, 0) do
+    if enabled?() do
+      Logger.debug("[EventBus] #{message_fun.()}")
+    end
+
+    :ok
+  end
+
+  def log(message) when is_binary(message) do
     if enabled?() do
       Logger.debug("[EventBus] #{message}")
     end
