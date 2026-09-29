@@ -165,4 +165,25 @@ defmodule EventBus.Service.GuardTest do
     notify_and_wait("guard-clear-1")
     assert_received {:processed, PassingSubscriber, @topic, "guard-clear-1"}
   end
+
+  test "guard that throws or exits is skipped without stopping later subscribers" do
+    Process.register(self(), :guard_test)
+
+    for {bad_guard, i} <-
+          Enum.with_index([fn _ -> throw(:nope) end, fn _ -> exit(:nope) end]) do
+      EventBus.subscribe({PassingSubscriber, ["guard_test_topic"]},
+        priority: 100,
+        guard: bad_guard
+      )
+
+      EventBus.subscribe({AnotherSubscriber, ["guard_test_topic"]})
+
+      log = capture_log(fn -> notify_and_wait("guard-throw-#{i}") end)
+
+      assert log =~ "Guard for"
+      refute_received {:processed, PassingSubscriber, @topic, _}
+      assert_received {:processed, AnotherSubscriber, @topic, _}
+      assert EventBus.fetch_event({@topic, "guard-throw-#{i}"}) == nil
+    end
+  end
 end

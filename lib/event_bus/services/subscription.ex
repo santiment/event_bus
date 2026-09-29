@@ -106,10 +106,7 @@ defmodule EventBus.Service.Subscription do
     end
   end
 
-  # Recompute which topics this subscriber matches and update topic_map
-  # entries. All topic-map writes are serialized through the subscription
-  # manager GenServer, so the read-modify-write here is race-free. Opts must
-  # already be written to the opts table when this runs.
+  # Read-modify-write is safe: topic-map writes go through the manager.
   defp rebuild_topic_map_for_subscriber(subscriber, patterns) do
     opts = fetch_opts(subscriber)
 
@@ -119,8 +116,6 @@ defmodule EventBus.Service.Subscription do
 
       new_pairs =
         if RegexUtil.superset?(patterns, topic) do
-          # Prepend + stable sort: equal priorities keep newest-first order,
-          # matching the previous sort-at-dispatch behavior.
           sort_by_priority([{subscriber, opts} | pairs])
         else
           pairs
@@ -156,8 +151,11 @@ defmodule EventBus.Service.Subscription do
 
   defp fetch_opts(subscriber) do
     case :ets.lookup(@opts_table, subscriber) do
-      [{^subscriber, opts}] -> Map.take(opts, [:priority, :guard])
-      _ -> %{priority: 0, guard: nil}
+      [{^subscriber, opts}] ->
+        Map.take(opts, [:priority, :guard, :limit_generation])
+
+      _ ->
+        %{priority: 0, guard: nil, limit_generation: nil}
     end
   end
 

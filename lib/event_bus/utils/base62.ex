@@ -23,7 +23,6 @@ defmodule EventBus.Util.Base62 do
     encode(div(num, 62)) <> encode(rem(num, 62))
   end
 
-  # Generates random base62 string with crypto:strong_rand_bytes
   defp random(size, max) do
     size
     |> :crypto.strong_rand_bytes()
@@ -33,12 +32,10 @@ defmodule EventBus.Util.Base62 do
     |> String.pad_leading(size, "0")
   end
 
-  # Current time (microsecond) encoded in base62
   defp now do
     encode(System.os_time(:microsecond))
   end
 
-  # Assigns a random node_id on first call
   defp node_id do
     case Application.get_env(:event_bus, :node_id) do
       nil -> save_node_id(random(3, 238_328))

@@ -29,9 +29,6 @@ defmodule EventBus.Util.MonotonicTime do
     Application.get_env(@eb_app, :time_unit, :microsecond)
   end
 
-  # The offset is stored together with its unit, so a runtime change of
-  # :time_unit can never mix an offset from one unit with monotonic readings
-  # in another — the offset is simply recomputed for the new unit.
   defp init_time(time_unit) do
     case Application.get_env(@eb_app, :init_time) do
       {^time_unit, time} -> time

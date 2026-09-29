@@ -4,9 +4,8 @@ defmodule EventBus.SweepStrategy.BulkSmart do
 
   Expires events in batches using `EventBus.SweepRuntime.expire_batch/1`. When
   no limited subscriptions (`subscribe_once`/`subscribe_n`) exist, batches are
-  pure ETS deletes with zero GenServer calls. Status and debug table cleanups
-  use single `select_delete` scans per batch instead of per-event
-  `match_delete`.
+  pure ETS deletes with zero GenServer calls. All per-event cleanups are O(1)
+  keyed deletes — no table scans.
 
   Emits one `[:event_bus, :sweep, :cycle]` telemetry event per sweep with
   `%{expired_per_topic: %{topic => count}}` in the metadata.

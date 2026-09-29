@@ -52,6 +52,14 @@ defmodule EventBus.Service.SweeperTest do
     Observation.save_snapshot({topic, id}, snapshot)
   end
 
+  defp limit_generation(topic, subscriber) do
+    topic
+    |> SubscriptionManager.subscribers_with_opts()
+    |> List.keyfind!(subscriber, 0)
+    |> elem(1)
+    |> Map.fetch!(:limit_generation)
+  end
+
   defp ttl_native(ms) do
     System.convert_time_unit(ms, :millisecond, :native)
   end
@@ -158,7 +166,9 @@ defmodule EventBus.Service.SweeperTest do
       EventBus.subscribe_n({subscriber, ["force_expire_limit_test"]}, 2)
 
       {[^subscriber], snapshot1} =
-        SubscriptionManager.prepare_subscribers_for_dispatch([subscriber])
+        SubscriptionManager.prepare_subscribers_for_dispatch([
+          {subscriber, limit_generation(topic, subscriber)}
+        ])
 
       create_event("fe3", topic)
 
@@ -170,7 +180,9 @@ defmodule EventBus.Service.SweeperTest do
       )
 
       {[^subscriber], snapshot2} =
-        SubscriptionManager.prepare_subscribers_for_dispatch([subscriber])
+        SubscriptionManager.prepare_subscribers_for_dispatch([
+          {subscriber, limit_generation(topic, subscriber)}
+        ])
 
       create_event("fe4", topic)
       setup_observation(topic, "fe4", [subscriber], snapshot2)
@@ -640,6 +652,33 @@ defmodule EventBus.Service.SweeperTest do
   end
 
   describe "SweepRuntime.expire_batch/1" do
+    test "spends the budget of limited subscribers still pending" do
+      topic = :sweep_runtime_limited_test
+      EventBus.register_topic(topic)
+      subscriber = {SRLimitedSub, nil}
+      EventBus.subscribe_n({subscriber, ["sweep_runtime_limited_test"]}, 2)
+
+      for id <- ["srl1", "srl2"] do
+        {[^subscriber], snapshot} =
+          SubscriptionManager.prepare_subscribers_for_dispatch([
+            {subscriber, limit_generation(topic, subscriber)}
+          ])
+
+        create_event(id, topic)
+        setup_observation(topic, id, [subscriber], snapshot)
+      end
+
+      assert %{expired_count: 2} =
+               EventBus.SweepRuntime.expire_batch([
+                 {topic, "srl1"},
+                 {topic, "srl2"}
+               ])
+
+      refute EventBus.subscribed?({subscriber, ["sweep_runtime_limited_test"]})
+
+      EventBus.unregister_topic(topic)
+    end
+
     test "expires events and returns map with count and topic breakdown" do
       sub = {SRBatchSub, nil}
 
@@ -820,6 +859,34 @@ defmodule EventBus.Service.SweeperTest do
     test "raises on invalid event_ttl values" do
       for invalid_value <- [:delete, 0, -100, "5000"] do
         with_event_ttl(invalid_value, &assert_sweeper_init_fails/0)
+      end
+    end
+
+    test "raises on invalid sweep_interval and sweep_batch_size values" do
+      with_event_ttl(1_000, fn ->
+        for key <- [:sweep_interval, :sweep_batch_size],
+            invalid_value <- [0, -1, "100", nil] do
+          prev = Application.get_env(:event_bus, key)
+          Application.put_env(:event_bus, key, invalid_value)
+
+          try do
+            assert_sweeper_init_fails()
+          after
+            if prev,
+              do: Application.put_env(:event_bus, key, prev),
+              else: Application.delete_env(:event_bus, key)
+          end
+        end
+      end)
+    end
+
+    test "rejects a sweep_strategy that does not implement the behaviour" do
+      assert_raise ArgumentError, ~r/invalid :sweep_strategy/, fn ->
+        Sweeper.sweep(ttl_native(0), strategy: String)
+      end
+
+      assert_raise ArgumentError, ~r/invalid :sweep_strategy/, fn ->
+        Sweeper.sweep(ttl_native(0), strategy: :bulk_smrt)
       end
     end
   end

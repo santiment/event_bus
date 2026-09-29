@@ -17,20 +17,12 @@ defmodule EventBus.Service.Notification do
   @doc false
   @spec notify(event()) :: :ok
   def notify(%Event{id: id, topic: topic} = event) do
-    # Pre-sorted (priority desc) {subscriber, opts} pairs, maintained at
-    # subscribe/register time. One ETS read — no per-subscriber lookups and
-    # no sorting on the notify hot path.
     subscriber_pairs = SubscriptionManager.subscribers_with_opts(topic)
 
     if subscriber_pairs == [] do
       warn_missing_topic_subscription(topic)
     else
-      # Limited subscriptions (subscribe_once/subscribe_n) require serialized
-      # admission accounting through the manager. When none exist — the common
-      # case — admit everyone with no GenServer call and skip the snapshot.
-      limited? = SubscriptionManager.any_limited?()
-
-      {admitted_pairs, snapshot} = admit_subscribers(subscriber_pairs, limited?)
+      {admitted_pairs, snapshot} = admit_subscribers(subscriber_pairs)
 
       if admitted_pairs == [] do
         Debug.log(fn ->
@@ -41,13 +33,9 @@ defmodule EventBus.Service.Notification do
 
         :ok = StoreService.create(event)
 
-        # The snapshot is only consulted to decrement limited budgets, so it is
-        # only needed when limited subscriptions are present. It must be saved
-        # BEFORE the observation rows: once status rows exist, a terminal
-        # transition can fire, and a missing snapshot would resolve to
-        # generation 0 — mismatching the real generation and leaking the
-        # in-flight reservation forever.
-        if limited?, do: ObservationService.save_snapshot({topic, id}, snapshot)
+        # Save before observation rows: a terminal transition needs the snapshot.
+        if map_size(snapshot) > 0,
+          do: ObservationService.save_snapshot({topic, id}, snapshot)
 
         admitted_subscribers =
           Enum.map(admitted_pairs, fn {sub, _opts} -> sub end)
@@ -82,26 +70,30 @@ defmodule EventBus.Service.Notification do
     :ok
   end
 
-  # Admission filter for limited subscriptions. The pairs list keeps its
-  # priority order — filtering by the admitted set preserves it.
-  @spec admit_subscribers([{EventBus.subscriber(), map()}], boolean()) ::
+  @spec admit_subscribers([{EventBus.subscriber(), map()}]) ::
           {[{EventBus.subscriber(), map()}], map()}
-  defp admit_subscribers(subscriber_pairs, false), do: {subscriber_pairs, %{}}
+  defp admit_subscribers(subscriber_pairs) do
+    candidates =
+      for {sub, %{limit_generation: generation}} <- subscriber_pairs,
+          not is_nil(generation),
+          do: {sub, generation}
 
-  defp admit_subscribers(subscriber_pairs, true) do
-    subscribers = Enum.map(subscriber_pairs, fn {sub, _opts} -> sub end)
+    if candidates == [] do
+      {subscriber_pairs, %{}}
+    else
+      {admitted, snapshot} =
+        SubscriptionManager.prepare_subscribers_for_dispatch(candidates)
 
-    {admitted, snapshot} =
-      SubscriptionManager.prepare_subscribers_for_dispatch(subscribers)
+      admitted_set = MapSet.new(admitted)
 
-    admitted_set = MapSet.new(admitted)
+      admitted_pairs =
+        Enum.filter(subscriber_pairs, fn {sub, opts} ->
+          is_nil(Map.get(opts, :limit_generation)) or
+            MapSet.member?(admitted_set, sub)
+        end)
 
-    admitted_pairs =
-      Enum.filter(subscriber_pairs, fn {sub, _opts} ->
-        MapSet.member?(admitted_set, sub)
-      end)
-
-    {admitted_pairs, snapshot}
+      {admitted_pairs, snapshot}
+    end
   end
 
   defp dispatch_in_order([], _event, _event_shadow, _start_time), do: :ok
@@ -127,7 +119,6 @@ defmodule EventBus.Service.Notification do
         "skipped_by_cancel topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}"
       end)
 
-      # Skipped before delivery: release in-flight without spending budget.
       ObservationService.discard_undelivered({sub_key, {topic, id}})
     end)
   end
@@ -138,7 +129,6 @@ defmodule EventBus.Service.Notification do
         do_dispatch(sub_key, {topic, id}, start_time)
 
       :skip ->
-        # Rejected before delivery: release in-flight without spending budget.
         ObservationService.discard_undelivered({sub_key, {topic, id}})
         :ok
     end
@@ -167,7 +157,6 @@ defmodule EventBus.Service.Notification do
 
       :skip
   catch
-    # A throw/exit from a guard must not kill the dispatch chain.
     kind, reason ->
       stacktrace = __STACKTRACE__
 
@@ -178,9 +167,6 @@ defmodule EventBus.Service.Notification do
       :skip
   end
 
-  # All subscribers are now normalized to {module, config} tuples.
-  # Config-less subscribers have config=nil; we call process({topic, id}) for those
-  # and process({config, topic, id}) for configured subscribers.
   defp do_dispatch({subscriber, config} = sub_key, {topic, id}, start_time) do
     Debug.log(fn ->
       "dispatch topic=#{inspect(topic)} id=#{inspect(id)} subscriber=#{inspect(sub_key)}"
@@ -225,8 +211,6 @@ defmodule EventBus.Service.Notification do
           )
       end
   catch
-    # A throw/exit from process/1 must not kill the dispatch chain — that
-    # would strand every remaining subscriber's status as :pending forever.
     kind, reason ->
       handle_dispatch_crash(
         sub_key,

@@ -50,7 +50,6 @@ defmodule EventBus.Service.Topic do
   @doc false
   @spec register(topic()) :: :ok
   def register(topic) do
-    # insert_new is atomic: returns true if inserted, false if already exists.
     if :ets.insert_new(@table, {topic}) do
       Debug.log(fn -> "register_topic topic=#{inspect(topic)}" end)
       Enum.each(@modules, fn mod -> mod.register_topic(topic) end)

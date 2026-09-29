@@ -21,6 +21,8 @@ defmodule EventBus.Service.Debug do
       Logger.put_module_level(__MODULE__, :debug)
     else
       Logger.delete_module_level(__MODULE__)
+      # Entries are only cleared while enabled; drop in-flight ones now.
+      :ets.delete_all_objects(@dispatch_table)
     end
 
     :ok
@@ -74,9 +76,6 @@ defmodule EventBus.Service.Debug do
   @doc false
   @spec clean_dispatch_metadata([EventBus.subscriber()], atom(), term()) :: :ok
   def clean_dispatch_metadata(subscribers, topic, id) do
-    # Dispatch metadata is only recorded when debug is enabled, so there is
-    # nothing to delete otherwise. Guarding here keeps the hot completion path
-    # free of N no-op ETS deletes per event when debug is off (the common case).
     if enabled?() do
       Enum.each(subscribers, fn sub ->
         :ets.delete(@dispatch_table, {sub, topic, id})
@@ -87,8 +86,6 @@ defmodule EventBus.Service.Debug do
   end
 
   @doc false
-  # Accepts a zero-arity fun so hot-path callers can defer string
-  # interpolation (inspect/2 etc.) until debug is actually enabled.
   @spec log((-> String.t()) | String.t()) :: :ok
   def log(message_fun) when is_function(message_fun, 0) do
     if enabled?() do

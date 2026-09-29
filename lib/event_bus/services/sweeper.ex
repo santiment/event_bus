@@ -25,9 +25,11 @@ defmodule EventBus.Service.Sweeper do
 
     interval =
       Application.get_env(:event_bus, :sweep_interval, @default_sweep_interval)
+      |> validate_positive_integer!(:sweep_interval)
 
     batch_size =
       Application.get_env(:event_bus, :sweep_batch_size, @default_batch_size)
+      |> validate_positive_integer!(:sweep_batch_size)
 
     strategy =
       resolve_strategy(
@@ -84,6 +86,15 @@ defmodule EventBus.Service.Sweeper do
     do_sweep(ttl_native, batch_size, strategy)
   end
 
+  defp validate_positive_integer!(value, _key)
+       when is_integer(value) and value > 0,
+       do: value
+
+  defp validate_positive_integer!(value, key) do
+    raise ArgumentError,
+          "EventBus.Service.Sweeper requires #{inspect(key)} to be a positive integer, got: #{inspect(value)}"
+  end
+
   defp schedule_sweep(interval) do
     Process.send_after(self(), :sweep, interval)
   end
@@ -125,9 +136,6 @@ defmodule EventBus.Service.Sweeper do
   defp resolve_strategy(:detailed), do: EventBus.SweepStrategy.Detailed
 
   defp resolve_strategy(module) when is_atom(module) do
-    # Fail fast (at Sweeper boot / manual sweep call) on a typo'd shorthand
-    # or a module that does not implement the behaviour, instead of crashing
-    # mid-sweep with an opaque UndefinedFunctionError.
     if Code.ensure_loaded?(module) and function_exported?(module, :init, 0) and
          function_exported?(module, :handle_batch, 2) and
          function_exported?(module, :telemetry_metadata, 1) do

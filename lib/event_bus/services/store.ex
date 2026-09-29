@@ -116,8 +116,6 @@ defmodule EventBus.Service.Store do
   defp wrap_select_result({results, continuation}), do: {results, continuation}
 
   @doc false
-  # Return all expired events at once. Suitable for tests and small result sets.
-  # For production sweeps, use `select_expired/2` + `continue_expired/1`.
   @spec find_expired(integer()) :: [{event_shadow(), integer()}]
   def find_expired(cutoff) do
     :ets.select(@table, expired_match_spec(cutoff))

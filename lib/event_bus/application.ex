@@ -14,9 +14,7 @@ defmodule EventBus.Application do
   alias EventBus.Util.MonotonicTime
 
   def start(_type, _args) do
-    # Cache the monotonic offset before any event can be created, so
-    # concurrent first callers of MonotonicTime.now/0 cannot race to compute
-    # slightly different offsets.
+    # Cache the offset before concurrent first callers can race.
     MonotonicTime.init()
 
     Debug.setup_table()

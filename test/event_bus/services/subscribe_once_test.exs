@@ -3,6 +3,7 @@ defmodule EventBus.Service.SubscribeOnceTest do
 
   import ExUnit.CaptureLog
 
+  alias EventBus.Manager.Subscription, as: SubscriptionManager
   alias EventBus.Model.Event
 
   @topic :subscribe_once_topic
@@ -61,6 +62,20 @@ defmodule EventBus.Service.SubscribeOnceTest do
       send(test_pid, {:spawned_waiter, id, waiter})
       :ok
     end
+  end
+
+  defp limit_generation(subscriber) do
+    @topic
+    |> SubscriptionManager.subscribers_with_opts()
+    |> List.keyfind!(subscriber, 0)
+    |> elem(1)
+    |> Map.fetch!(:limit_generation)
+  end
+
+  defp notify_forever(i, n) do
+    event = %Event{id: "stress-#{i}-#{n}", topic: @topic, data: %{}}
+    EventBus.notify_sync(event)
+    notify_forever(i, n + 1)
   end
 
   defp notify_and_wait(id) do
@@ -259,6 +274,115 @@ defmodule EventBus.Service.SubscribeOnceTest do
     refute_receive {:completion_waiter, "in-flight-2", _pid}, 150
     refute_receive {:spawned_waiter, "in-flight-2", _pid}, 150
 
+    send(waiter, :complete)
+    Process.sleep(100)
+
+    assert [] == EventBus.subscribers()
+  end
+
+  test "subscribe_n rejects invalid counts without disturbing other limits" do
+    EventBus.subscribe_once({OnceSubscriber, ["subscribe_once_topic"]})
+    manager = Process.whereis(SubscriptionManager)
+
+    for count <- [0, -1, 1.5, "3", nil] do
+      assert_raise ArgumentError, "count must be a positive integer", fn ->
+        EventBus.subscribe_n(
+          {CountingSubscriber, ["subscribe_once_topic"]},
+          count
+        )
+      end
+    end
+
+    assert Process.whereis(SubscriptionManager) == manager
+
+    assert MapSet.new([{OnceSubscriber, nil}]) ==
+             SubscriptionManager.limited_subscribers()
+
+    refute EventBus.subscribed?({CountingSubscriber, ["subscribe_once_topic"]})
+  end
+
+  test "admission drops candidates read from a replaced or removed subscription" do
+    subscriber = {OnceSubscriber, nil}
+
+    EventBus.subscribe_once({OnceSubscriber, ["subscribe_once_topic"]})
+    stale_generation = limit_generation(subscriber)
+
+    EventBus.subscribe_once({OnceSubscriber, ["subscribe_once_topic"]})
+    fresh_generation = limit_generation(subscriber)
+    assert fresh_generation > stale_generation
+
+    assert {[], %{}} ==
+             SubscriptionManager.prepare_subscribers_for_dispatch([
+               {subscriber, stale_generation}
+             ])
+
+    assert {[^subscriber], %{^subscriber => ^fresh_generation}} =
+             SubscriptionManager.prepare_subscribers_for_dispatch([
+               {subscriber, fresh_generation}
+             ])
+
+    EventBus.unsubscribe(OnceSubscriber)
+
+    assert {[], %{}} ==
+             SubscriptionManager.prepare_subscribers_for_dispatch([
+               {subscriber, fresh_generation}
+             ])
+  end
+
+  test "unlimited subscribers carry no limit generation" do
+    EventBus.subscribe({CountingSubscriber, ["subscribe_once_topic"]})
+    assert nil == limit_generation({CountingSubscriber, nil})
+  end
+
+  @tag :capture_log
+  test "subscribe_once never overdelivers under concurrent notify" do
+    Process.register(self(), :subscribe_once_test)
+
+    notifiers = for i <- 1..8, do: spawn(fn -> notify_forever(i, 0) end)
+
+    try do
+      for round <- 1..50 do
+        EventBus.subscribe_once({OnceSubscriber, ["subscribe_once_topic"]})
+        assert_receive {:processed, OnceSubscriber, @topic, _id}, 1_000
+
+        refute_receive {:processed, OnceSubscriber, @topic, _id},
+                       20,
+                       "subscribe_once delivered twice in round #{round}"
+      end
+    after
+      Enum.each(notifiers, &Process.exit(&1, :kill))
+    end
+  end
+
+  test "unregister_topic settles in-flight reservations of limited subscribers" do
+    Application.put_env(:event_bus, :subscribe_once_test_pid, self())
+
+    EventBus.subscribe_n(
+      {DelayedCompletionSubscriber, ["subscribe_once_topic"]},
+      2
+    )
+
+    EventBus.Service.Notification.notify(%Event{
+      id: "unreg-1",
+      topic: @topic,
+      data: %{}
+    })
+
+    assert_receive {:spawned_waiter, "unreg-1", stranded_waiter}
+
+    EventBus.unregister_topic(@topic)
+    EventBus.register_topic(@topic)
+
+    # The dropped delivery spent one unit, like expiry.
+    send(stranded_waiter, :complete)
+
+    EventBus.Service.Notification.notify(%Event{
+      id: "unreg-2",
+      topic: @topic,
+      data: %{}
+    })
+
+    assert_receive {:spawned_waiter, "unreg-2", waiter}
     send(waiter, :complete)
     Process.sleep(100)
 

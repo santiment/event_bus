@@ -14,12 +14,7 @@ defmodule EventBus.Service.Observation do
   @typep topic :: EventBus.topic()
 
   @table :eb_event_watchers
-  # Per-subscriber terminal status for lock-free atomic transitions.
-  # Keys are {topic, id, subscriber}, values are :pending | :completed | :skipped.
   @status_table :eb_event_watcher_status
-  # Stores the per-subscriber subscription generation captured at dispatch time
-  # for each event_shadow. Observation consults this snapshot before consuming a
-  # subscribe_once/subscribe_n counter.
   @snapshot_table :eb_event_subscription_generations
   @table_opts [
     :set,
@@ -52,19 +47,29 @@ defmodule EventBus.Service.Observation do
   @doc false
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
+    release_limited_reservations(topic)
     :ets.match_delete(@table, {{topic, :_}, :_, :_})
     :ets.match_delete(@status_table, {{topic, :_, :_}, :_})
     :ets.match_delete(@snapshot_table, {{topic, :_}, :_})
     :ok
   end
 
+  # Pending deliveries of a dropped topic never terminate; settle their
+  # limited budgets like expiry does, or in_flight leaks forever.
+  defp release_limited_reservations(topic) do
+    if SubscriptionManager.any_limited?() do
+      event_shadows =
+        :ets.select(@table, [{{{topic, :"$1"}, :_, :_}, [], [{{topic, :"$1"}}]}])
+
+      expire_batch(event_shadows, SubscriptionManager.limited_subscribers())
+    end
+
+    :ok
+  end
+
   @doc false
   @spec mark_as_completed(subscriber_with_event_ref()) :: :ok
   def mark_as_completed({subscriber, {topic, id} = event_shadow}) do
-    # Atomic CAS: transition :pending -> :completed only if currently :pending.
-    # select_replace returns the number of replaced objects (0 or 1).
-    # The {:const, key} wrapper is required because bare tuples in match spec
-    # guards are interpreted as function calls, not literal values.
     case cas_status({topic, id, subscriber}, :pending, :completed) do
       1 ->
         Debug.log_terminal("completed", subscriber, topic, id)
@@ -91,11 +96,6 @@ defmodule EventBus.Service.Observation do
   end
 
   @doc false
-  # Terminal transition for a subscriber that never received the event —
-  # rejected by its guard or skipped by an upstream cancellation. Marks the
-  # subscriber as skipped and releases any limited-subscription in-flight
-  # reservation WITHOUT spending the delivery budget, so subscribe_once/
-  # subscribe_n are not consumed by an event the subscriber never processed.
   @spec discard_undelivered(subscriber_with_event_ref()) :: :ok
   def discard_undelivered({subscriber, {topic, id} = event_shadow}) do
     case cas_status({topic, id, subscriber}, :pending, :skipped) do
@@ -151,8 +151,6 @@ defmodule EventBus.Service.Observation do
     :ok
   end
 
-  # Atomically decrement the remaining counter.
-  # Only the process that decrements to 0 runs the cleanup.
   @spec check_completion(event_shadow()) :: :ok
   defp check_completion({topic, id}) do
     case :ets.update_counter(@table, {topic, id}, {3, -1}) do
@@ -160,7 +158,6 @@ defmodule EventBus.Service.Observation do
       _ -> :ok
     end
   rescue
-    # Watcher already cleaned up (e.g., topic unregistered concurrently)
     ArgumentError -> :ok
   end
 
@@ -208,23 +205,15 @@ defmodule EventBus.Service.Observation do
              skippers: subscribers()
            }}
           | :not_found
-  # Note: not fully atomic — between the lookup and the delete, on_complete
-  # could fire concurrently if another process completes the last subscriber.
-  # This can cause benign double-deletes (ETS delete on missing key is a no-op).
-  # Budget decrements are protected: each pending status is CAS-claimed
-  # (:pending -> :skipped) before being counted, so a concurrent terminal
-  # transition for the same subscriber can never double-spend the budget.
   def force_expire({topic, id}) do
     case :ets.lookup(@table, {topic, id}) do
       [{{^topic, ^id}, subscribers, _}] ->
         {completers, skippers} = collect_terminal(topic, id, subscribers)
         pending = pending_subscribers(subscribers, completers, skippers)
 
-        # CAS-claim each pending status so a concurrent mark_as_completed/
-        # mark_as_skipped cannot decrement the same delivery a second time.
+        # CAS-claim so a concurrent terminal transition cannot double-spend budget.
         claimed = claim_pending(topic, id, pending)
 
-        # One GenServer call for all claimed subscribers in this event.
         batch_decrement_limits(claimed, {topic, id})
 
         Debug.log(fn -> "expired topic=#{inspect(topic)} id=#{inspect(id)}" end)
@@ -257,11 +246,8 @@ defmodule EventBus.Service.Observation do
   def expire_batch(event_shadows, limited_set) do
     {decrements, to_delete} = collect_batch(event_shadows, limited_set)
 
-    # One GenServer call for ALL limit decrements across the batch.
-    # No-op when the list is empty (common path — no limited subscribers).
     SubscriptionManager.decrement_limits(decrements)
 
-    # Delete from all ETS tables.
     delete_expired(to_delete)
 
     topic_counts =
@@ -272,10 +258,6 @@ defmodule EventBus.Service.Observation do
 
   defp collect_batch(event_shadows, limited_set) do
     if MapSet.size(limited_set) == 0 do
-      # Fast path: pure ETS operations, no GenServer calls.
-      # The lookup and later delete are not atomic — on_complete could
-      # clean the entry in between — but the resulting overcount in the
-      # returned total is benign (deletes on missing keys are no-ops).
       to_delete =
         Enum.flat_map(event_shadows, fn {topic, id} ->
           case :ets.lookup(@table, {topic, id}) do
@@ -307,9 +289,6 @@ defmodule EventBus.Service.Observation do
     end)
   end
 
-  # Only touch status/snapshot for subscribers that are in the limited set.
-  # The :pending status is CAS-claimed (-> :skipped) so a concurrent terminal
-  # transition for the same delivery cannot decrement the budget twice.
   defp collect_limited_decrements(topic, id, subscribers, limited_set) do
     Enum.flat_map(subscribers, fn sub ->
       if MapSet.member?(limited_set, sub) and
@@ -321,9 +300,6 @@ defmodule EventBus.Service.Observation do
     end)
   end
 
-  # CAS-claim pending statuses (:pending -> :skipped); returns the subset of
-  # subscribers actually claimed. Losers of the race are already terminal and
-  # have spent (or released) their budget through their own transition.
   defp claim_pending(topic, id, pending) do
     Enum.filter(pending, fn sub ->
       cas_status({topic, id, sub}, :pending, :skipped) == 1
@@ -345,7 +321,6 @@ defmodule EventBus.Service.Observation do
     end
   end
 
-  # Reconstruct completers/skippers lists from per-subscriber status entries.
   @spec collect_terminal(topic(), EventBus.event_id(), subscribers()) ::
           {subscribers(), subscribers()}
   defp collect_terminal(topic, id, subscribers) do
@@ -358,10 +333,6 @@ defmodule EventBus.Service.Observation do
     end)
   end
 
-  # Spend one unit of a limited subscriber's delivery budget after a real
-  # terminal (completed, or skipped after delivery). Gated on any_limited? so
-  # the common all-unlimited case makes zero GenServer calls: when no limits
-  # exist globally, this subscriber cannot be limited, so the call is a no-op.
   defp decrement_limit(subscriber, event_shadow) do
     if SubscriptionManager.any_limited?() do
       generation = snapshot_generation(event_shadow, subscriber)
@@ -371,8 +342,6 @@ defmodule EventBus.Service.Observation do
     end
   end
 
-  # Release an in-flight reservation for an undelivered event (see
-  # discard_undelivered/1). Gated identically to decrement_limit/2.
   defp release_in_flight(subscriber, event_shadow) do
     if SubscriptionManager.any_limited?() do
       generation = snapshot_generation(event_shadow, subscriber)
@@ -387,12 +356,8 @@ defmodule EventBus.Service.Observation do
     subscribers -- terminal
   end
 
-  # Atomic compare-and-swap on the status table.
-  # Transitions the entry from `expected` to `new_status` if and only if
-  # the current value matches `expected`. Returns 1 on success, 0 otherwise.
-  # Uses {:const, key} in the guard because bare tuples in match spec
-  # guards/bodies are interpreted as function calls, not literal values.
   @spec cas_status(term(), atom(), atom()) :: 0 | 1
+  # {:const, key}: bare tuples in match-spec guards are read as calls.
   defp cas_status(key, expected, new_status) do
     :ets.select_replace(@status_table, [
       {{:"$1", expected}, [{:==, :"$1", {:const, key}}],
@@ -400,7 +365,6 @@ defmodule EventBus.Service.Observation do
     ])
   end
 
-  # All deletes are O(1) hash lookups — no table scans.
   defp delete_event_entries(topic, id, subscribers) do
     Debug.clean_dispatch_metadata(subscribers, topic, id)
 

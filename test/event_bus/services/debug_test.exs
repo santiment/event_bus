@@ -285,4 +285,27 @@ defmodule EventBus.Service.DebugTest do
     assert logs =~ "duration="
     assert logs =~ "s"
   end
+
+  test "toggling debug off clears dispatch metadata of in-flight events" do
+    defmodule NeverCompletingSubscriber do
+      def process({_topic, _id}), do: :ok
+    end
+
+    Debug.toggle(true)
+
+    capture_log(fn ->
+      EventBus.subscribe({NeverCompletingSubscriber, ["debug_test_topic"]})
+      Notification.notify(%Event{id: "dbg-inflight", topic: @topic, data: nil})
+    end)
+
+    assert [_] = :ets.tab2list(:eb_dispatch_metadata)
+
+    Debug.toggle(false)
+
+    EventBus.mark_as_completed(
+      {NeverCompletingSubscriber, {@topic, "dbg-inflight"}}
+    )
+
+    assert [] == :ets.tab2list(:eb_dispatch_metadata)
+  end
 end
