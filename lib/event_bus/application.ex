@@ -6,6 +6,7 @@ defmodule EventBus.Application do
   alias EventBus.Manager.Subscription
 
   alias EventBus.Service.Debug
+  alias EventBus.Service.Notification, as: NotificationService
   alias EventBus.Service.Observation, as: ObservationService
   alias EventBus.Service.Store, as: StoreService
   alias EventBus.Service.Subscription, as: SubscriptionService
@@ -18,6 +19,7 @@ defmodule EventBus.Application do
     MonotonicTime.init()
 
     Debug.setup_table()
+    NotificationService.setup_table()
     StoreService.setup_table()
     ObservationService.setup_table()
     SubscriptionService.setup_tables()

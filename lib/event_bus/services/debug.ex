@@ -5,17 +5,23 @@ defmodule EventBus.Service.Debug do
 
   @app :event_bus
   @dispatch_table :eb_dispatch_metadata
+  @enabled_key {__MODULE__, :enabled}
 
   @doc false
   @spec enabled?() :: boolean()
-  def enabled? do
-    Application.get_env(@app, :debug, false) == true
+  def enabled?() do
+    :persistent_term.get(@enabled_key, false)
   end
 
   @doc false
   @spec toggle(boolean()) :: :ok
   def toggle(enabled) when is_boolean(enabled) do
     Application.put_env(@app, :debug, enabled, persistent: true)
+    apply_enabled(enabled)
+  end
+
+  defp apply_enabled(enabled) do
+    if enabled?() != enabled, do: :persistent_term.put(@enabled_key, enabled)
 
     if enabled do
       Logger.put_module_level(__MODULE__, :debug)
@@ -41,7 +47,7 @@ defmodule EventBus.Service.Debug do
       ])
     end
 
-    :ok
+    apply_enabled(Application.get_env(@app, :debug, false) == true)
   end
 
   @doc false

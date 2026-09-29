@@ -11,7 +11,8 @@ defmodule EventBus.Service.Topic do
 
   @table :eb_topics
   @table_opts [:set, :public, :named_table, {:read_concurrency, true}]
-  @modules [StoreService, SubscriptionManager, ObservationService]
+  # Store last: a racing notify then cleans up its own store row.
+  @modules [SubscriptionManager, ObservationService, StoreService]
 
   @doc false
   @spec setup_table() :: :ok

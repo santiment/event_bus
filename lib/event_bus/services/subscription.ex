@@ -7,6 +7,7 @@ defmodule EventBus.Service.Subscription do
   @subscribers_table :eb_subscribers
   @topic_map_table :eb_topic_subscribers
   @opts_table :eb_subscription_opts
+  @limits_table :eb_subscription_limits
 
   @typep subscriber :: EventBus.subscriber()
   @typep subscribers :: EventBus.subscribers()
@@ -30,7 +31,12 @@ defmodule EventBus.Service.Subscription do
   @doc false
   @spec setup_tables() :: :ok
   def setup_tables do
-    for table <- [@subscribers_table, @topic_map_table, @opts_table] do
+    for table <- [
+          @subscribers_table,
+          @topic_map_table,
+          @opts_table,
+          @limits_table
+        ] do
       if :ets.info(table) == :undefined do
         :ets.new(table, @ets_opts)
       end

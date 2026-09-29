@@ -11,8 +11,21 @@ defmodule EventBus.Service.Notification do
   alias EventBus.Service.Store, as: StoreService
   alias EventBus.Telemetry
 
+  @warnings_table :eb_missing_subscriber_warnings
+  @default_warning_interval 60_000
+
   @typep event :: EventBus.event()
   @typep topic :: EventBus.topic()
+
+  @doc false
+  @spec setup_table() :: :ok
+  def setup_table() do
+    if :ets.info(@warnings_table) == :undefined do
+      :ets.new(@warnings_table, [:set, :public, :named_table])
+    end
+
+    :ok
+  end
 
   @doc false
   @spec notify(event()) :: :ok
@@ -29,45 +42,72 @@ defmodule EventBus.Service.Notification do
           "notify_dropped topic=#{inspect(topic)} id=#{inspect(id)} reason=no_admitted_subscribers"
         end)
       else
-        Debug.log(fn -> "notify topic=#{inspect(topic)} id=#{inspect(id)}" end)
-
-        :ok = StoreService.create(event)
-
-        # Save before observation rows: a terminal transition needs the snapshot.
-        if map_size(snapshot) > 0,
-          do: ObservationService.save_snapshot({topic, id}, snapshot)
-
         admitted_subscribers =
           Enum.map(admitted_pairs, fn {sub, _opts} -> sub end)
 
-        :ok =
-          ObservationService.save({topic, id}, {admitted_subscribers, [], []})
+        if ObservationService.claim({topic, id}, admitted_subscribers) do
+          Debug.log(fn ->
+            "notify topic=#{inspect(topic)} id=#{inspect(id)}"
+          end)
 
-        start_time = System.monotonic_time()
-
-        Telemetry.execute(
-          [:event_bus, :notify, :start],
-          %{system_time: System.system_time()},
-          %{topic: topic, event_id: id}
-        )
-
-        dispatch_in_order(admitted_pairs, event, {topic, id}, start_time)
-
-        duration = System.monotonic_time() - start_time
-
-        Telemetry.execute(
-          [:event_bus, :notify, :stop],
-          %{duration: duration},
-          %{
-            topic: topic,
-            event_id: id,
-            subscriber_count: length(admitted_pairs)
-          }
-        )
+          dispatch(event, admitted_pairs, admitted_subscribers, snapshot)
+        else
+          drop_duplicate(topic, id, snapshot)
+        end
       end
     end
 
     :ok
+  end
+
+  defp dispatch(
+         %Event{id: id, topic: topic} = event,
+         pairs,
+         subscribers,
+         snapshot
+       ) do
+    :ok = StoreService.create(event)
+
+    # Save before status rows: a terminal transition needs the snapshot.
+    if map_size(snapshot) > 0,
+      do: ObservationService.save_snapshot({topic, id}, snapshot)
+
+    :ok = ObservationService.save_statuses({topic, id}, subscribers)
+
+    if ObservationService.claimed?({topic, id}) do
+      run(event, pairs)
+    else
+      ObservationService.abandon({topic, id}, subscribers)
+    end
+  end
+
+  defp run(%Event{id: id, topic: topic} = event, pairs) do
+    start_time = System.monotonic_time()
+
+    Telemetry.execute(
+      [:event_bus, :notify, :start],
+      %{system_time: System.system_time()},
+      %{topic: topic, event_id: id}
+    )
+
+    dispatch_in_order(pairs, event, {topic, id}, start_time)
+
+    Telemetry.execute(
+      [:event_bus, :notify, :stop],
+      %{duration: System.monotonic_time() - start_time},
+      %{topic: topic, event_id: id, subscriber_count: length(pairs)}
+    )
+  end
+
+  # Both would share one set of observation rows.
+  defp drop_duplicate(topic, id, snapshot) do
+    Enum.each(snapshot, fn {sub, generation} ->
+      SubscriptionManager.release_in_flight(sub, generation)
+    end)
+
+    Logger.warning(
+      "Event #{inspect(id)} on topic :#{topic} is already being dispatched; duplicate notify dropped"
+    )
   end
 
   @spec admit_subscribers([{EventBus.subscriber(), map()}]) ::
@@ -272,10 +312,37 @@ defmodule EventBus.Service.Notification do
 
   @spec warn_missing_topic_subscription(topic()) :: :ok
   defp warn_missing_topic_subscription(topic) do
-    if EventBus.topic_exist?(topic) do
-      Logger.warning("Topic :#{topic} doesn't have subscribers")
-    else
-      Logger.warning("Topic :#{topic} is not registered and has no subscribers")
+    cond do
+      not warning_due?(topic) ->
+        :ok
+
+      EventBus.topic_exist?(topic) ->
+        Logger.warning("Topic :#{topic} doesn't have subscribers")
+
+      true ->
+        Logger.warning(
+          "Topic :#{topic} is not registered and has no subscribers"
+        )
+    end
+  end
+
+  defp warning_due?(topic) do
+    interval =
+      Application.get_env(
+        :event_bus,
+        :missing_subscribers_warning_interval,
+        @default_warning_interval
+      )
+
+    now = System.monotonic_time(:millisecond)
+
+    case :ets.lookup(@warnings_table, topic) do
+      [{^topic, warned_at}] when now - warned_at < interval ->
+        false
+
+      _ ->
+        :ets.insert(@warnings_table, {topic, now})
+        true
     end
   end
 

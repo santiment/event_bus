@@ -10,7 +10,13 @@ defmodule EventBus.Service.Store do
   @typep topic :: EventBus.topic()
 
   @table :eb_event_store
-  @table_opts [:set, :public, :named_table, {:read_concurrency, true}]
+  @table_opts [
+    :set,
+    :public,
+    :named_table,
+    {:read_concurrency, true},
+    {:write_concurrency, true}
+  ]
 
   @doc false
   @spec setup_table() :: :ok

@@ -193,4 +193,8 @@ defmodule EventBus.Service.StoreTest do
     Store.delete({topic, "FE1"})
     EventBus.unregister_topic(topic)
   end
+
+  test "store table allows concurrent writers" do
+    assert :ets.info(Store.table_name(), :write_concurrency) == true
+  end
 end

@@ -47,23 +47,16 @@ defmodule EventBus.Service.Observation do
   @doc false
   @spec unregister_topic(topic()) :: :ok
   def unregister_topic(topic) do
-    release_limited_reservations(topic)
-    :ets.match_delete(@table, {{topic, :_}, :_, :_})
-    :ets.match_delete(@status_table, {{topic, :_, :_}, :_})
-    :ets.match_delete(@snapshot_table, {{topic, :_}, :_})
-    :ok
-  end
+    # Expire, not bulk-delete: a racing notify's rows must be settled.
+    event_shadows =
+      :ets.select(@table, [{{{topic, :"$1"}, :_, :_}, [], [{{topic, :"$1"}}]}])
 
-  # Pending deliveries of a dropped topic never terminate; settle their
-  # limited budgets like expiry does, or in_flight leaks forever.
-  defp release_limited_reservations(topic) do
-    if SubscriptionManager.any_limited?() do
-      event_shadows =
-        :ets.select(@table, [{{{topic, :"$1"}, :_, :_}, [], [{{topic, :"$1"}}]}])
+    limited_set =
+      if SubscriptionManager.any_limited?(),
+        do: SubscriptionManager.limited_subscribers(),
+        else: MapSet.new()
 
-      expire_batch(event_shadows, SubscriptionManager.limited_subscribers())
-    end
-
+    expire_batch(event_shadows, limited_set)
     :ok
   end
 
@@ -130,14 +123,39 @@ defmodule EventBus.Service.Observation do
   @doc false
   @spec save(event_shadow(), {subscribers(), list(), list()}) :: :ok
   def save({topic, id}, {subscribers, [], []}) do
-    count = length(subscribers)
-    :ets.insert(@table, {{topic, id}, subscribers, count})
+    :ets.insert(@table, {{topic, id}, subscribers, length(subscribers)})
+    save_statuses({topic, id}, subscribers)
+  end
 
+  @doc false
+  @spec claim(event_shadow(), subscribers()) :: boolean()
+  def claim({topic, id}, subscribers) do
+    :ets.insert_new(@table, {{topic, id}, subscribers, length(subscribers)})
+  end
+
+  @doc false
+  @spec claimed?(event_shadow()) :: boolean()
+  def claimed?({topic, id}), do: :ets.member(@table, {topic, id})
+
+  @doc false
+  # Undo a dispatch whose watcher was wiped mid-setup (topic unregistered).
+  @spec abandon(event_shadow(), subscribers()) :: :ok
+  def abandon({topic, id} = event_shadow, subscribers) do
+    subscribers
+    |> Enum.filter(&(cas_status({topic, id, &1}, :pending, :skipped) == 1))
+    |> Enum.each(&release_in_flight(&1, event_shadow))
+
+    delete_event_entries(topic, id, subscribers)
+    :ok
+  end
+
+  @doc false
+  @spec save_statuses(event_shadow(), subscribers()) :: :ok
+  def save_statuses({topic, id}, subscribers) do
     status_rows =
       Enum.map(subscribers, fn sub -> {{topic, id, sub}, :pending} end)
 
     :ets.insert(@status_table, status_rows)
-
     :ok
   end
 
@@ -365,14 +383,15 @@ defmodule EventBus.Service.Observation do
     ])
   end
 
+  # Watcher first, so a notify that still sees it knows its rows get deleted.
   defp delete_event_entries(topic, id, subscribers) do
+    :ets.delete(@table, {topic, id})
     Debug.clean_dispatch_metadata(subscribers, topic, id)
 
     Enum.each(subscribers, fn sub ->
       :ets.delete(@status_table, {topic, id, sub})
     end)
 
-    :ets.delete(@table, {topic, id})
     :ets.delete(@snapshot_table, {topic, id})
     StoreService.delete({topic, id})
   end

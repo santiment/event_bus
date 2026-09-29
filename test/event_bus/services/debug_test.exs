@@ -308,4 +308,19 @@ defmodule EventBus.Service.DebugTest do
 
     assert [] == :ets.tab2list(:eb_dispatch_metadata)
   end
+
+  test "debug: true in config enables logging at startup" do
+    Application.put_env(:event_bus, :debug, true)
+
+    try do
+      Debug.setup_table()
+      assert Debug.enabled?()
+
+      # The module level must be raised too, or nothing is logged above :debug.
+      assert capture_log([level: :debug], fn -> Debug.log("from config") end) =~
+               "from config"
+    after
+      Debug.toggle(false)
+    end
+  end
 end

@@ -17,6 +17,8 @@ defmodule EventBus.Manager.Subscription do
 
   @backend SubscriptionService
   @opts_table :eb_subscription_opts
+  # Survives manager restarts.
+  @limits_table :eb_subscription_limits
   @default_opts %{priority: 0, guard: nil, limit_generation: nil}
 
   @doc false
@@ -30,7 +32,19 @@ defmodule EventBus.Manager.Subscription do
     ref = :counters.new(1, [:atomics])
     :persistent_term.put({__MODULE__, :limited_gate}, ref)
 
-    {:ok, %{limits: %{}, generation: 0}}
+    limits =
+      for {{_module, _config} = subscriber, limit} <-
+            :ets.tab2list(@limits_table),
+          into: %{},
+          do: {subscriber, limit}
+
+    generation =
+      case :ets.lookup(@limits_table, :generation) do
+        [{:generation, generation}] -> generation
+        [] -> 0
+      end
+
+    {:ok, sync_limited_gate(%{limits: limits, generation: generation})}
   end
 
   @doc """
@@ -46,6 +60,8 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe(subscriber_with_topic_patterns()) :: :ok
   def subscribe({subscriber, topic_patterns}) do
+    validate_patterns!(topic_patterns)
+
     GenServer.call(
       __MODULE__,
       {:subscribe, {normalize(subscriber), topic_patterns}}
@@ -57,6 +73,7 @@ defmodule EventBus.Manager.Subscription do
   """
   @spec subscribe(subscriber_with_topic_patterns(), keyword()) :: :ok
   def subscribe({subscriber, topic_patterns}, opts) do
+    validate_patterns!(topic_patterns)
     normalized_opts = validate_opts!(opts)
 
     GenServer.call(
@@ -80,6 +97,8 @@ defmodule EventBus.Manager.Subscription do
   @spec subscribe_n(subscriber_with_topic_patterns(), pos_integer()) :: :ok
   def subscribe_n({subscriber, topic_patterns}, count) do
     # Validated in the caller: a manager crash would drop all limit state.
+    validate_patterns!(topic_patterns)
+
     if not (is_integer(count) and count > 0) do
       raise ArgumentError, "count must be a positive integer"
     end
@@ -336,6 +355,14 @@ defmodule EventBus.Manager.Subscription do
     {:reply, limited, state}
   end
 
+  defp validate_patterns!(patterns) do
+    if not (is_list(patterns) and
+              Enum.all?(patterns, &(is_binary(&1) or is_atom(&1)))) do
+      raise ArgumentError,
+            "topic patterns must be a list of strings or atoms, got: #{inspect(patterns)}"
+    end
+  end
+
   defp validate_opts!(opts) when is_list(opts) do
     priority = Keyword.get(opts, :priority, 0)
     guard = Keyword.get(opts, :guard)
@@ -362,18 +389,23 @@ defmodule EventBus.Manager.Subscription do
   end
 
   defp reset_subscription_state(state, subscriber) do
-    clear_subscription_state(
-      %{state | generation: state.generation + 1},
-      subscriber
-    )
+    generation = state.generation + 1
+    :ets.insert(@limits_table, {:generation, generation})
+    clear_subscription_state(%{state | generation: generation}, subscriber)
   end
 
   defp clear_subscription_state(state, subscriber) do
+    :ets.delete(@limits_table, subscriber)
     %{state | limits: Map.delete(state.limits, subscriber)}
   end
 
   defp put_limit(state, subscriber, count) do
     limit = %{generation: state.generation, remaining: count, in_flight: 0}
+    store_limit(state, subscriber, limit)
+  end
+
+  defp store_limit(state, subscriber, limit) do
+    :ets.insert(@limits_table, {subscriber, limit})
     %{state | limits: Map.put(state.limits, subscriber, limit)}
   end
 
@@ -408,26 +440,26 @@ defmodule EventBus.Manager.Subscription do
   end
 
   defp do_prepare_subscribers(candidates, state) do
-    {admitted, snapshot, limits} =
-      Enum.reduce(candidates, {[], %{}, state.limits}, fn {subscriber,
-                                                           generation},
-                                                          {admitted, snapshot,
-                                                           limits} = acc ->
-        case Map.get(limits, subscriber) do
+    {admitted, snapshot, state} =
+      Enum.reduce(candidates, {[], %{}, state}, fn {subscriber, generation},
+                                                   {admitted, snapshot, state} =
+                                                     acc ->
+        case Map.get(state.limits, subscriber) do
           %{generation: ^generation, remaining: remaining, in_flight: in_flight} =
               limit
           when remaining > in_flight ->
-            updated_limit = %{limit | in_flight: in_flight + 1}
+            state =
+              store_limit(state, subscriber, %{limit | in_flight: in_flight + 1})
 
             {[subscriber | admitted], Map.put(snapshot, subscriber, generation),
-             Map.put(limits, subscriber, updated_limit)}
+             state}
 
           _ ->
             acc
         end
       end)
 
-    {Enum.reverse(admitted), snapshot, %{state | limits: limits}}
+    {Enum.reverse(admitted), snapshot, state}
   end
 
   defp maybe_finalize_limit(state, subscriber, %{remaining: 0, in_flight: 0}) do
@@ -437,7 +469,7 @@ defmodule EventBus.Manager.Subscription do
   end
 
   defp maybe_finalize_limit(state, subscriber, updated_limit) do
-    %{state | limits: Map.put(state.limits, subscriber, updated_limit)}
+    store_limit(state, subscriber, updated_limit)
   end
 
   defp normalize(subscriber) when is_atom(subscriber), do: {subscriber, nil}

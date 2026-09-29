@@ -202,4 +202,25 @@ defmodule EventBus.Service.SubscriptionTest do
       )
     end
   end
+
+  test "invalid topic patterns raise without crashing the manager" do
+    manager = Process.whereis(EventBus.Manager.Subscription)
+
+    for patterns <- ["metrics_received", nil, [~r/metrics/], [1]] do
+      for subscribe <- [
+            fn -> EventBus.subscribe({InputLogger, patterns}) end,
+            fn -> EventBus.subscribe({InputLogger, patterns}, priority: 1) end,
+            fn -> EventBus.subscribe_n({InputLogger, patterns}, 1) end
+          ] do
+        assert_raise ArgumentError, ~r/topic patterns must be a list/, subscribe
+      end
+    end
+
+    # A bad row in the subscribers table would crash every later register.
+    EventBus.register_topic(:after_invalid_patterns)
+    EventBus.unregister_topic(:after_invalid_patterns)
+
+    assert Process.whereis(EventBus.Manager.Subscription) == manager
+    assert [] == Subscription.subscribers()
+  end
 end

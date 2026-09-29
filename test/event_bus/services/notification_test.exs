@@ -156,4 +156,41 @@ defmodule EventBus.Service.NotificationTest do
     assert logs =~ "completely_unknown_topic"
     assert logs =~ "is not registered and has no subscribers"
   end
+
+  test "missing-subscriber warnings are throttled per topic" do
+    Application.put_env(
+      :event_bus,
+      :missing_subscribers_warning_interval,
+      60_000
+    )
+
+    :ets.delete(:eb_missing_subscriber_warnings, :throttled_topic)
+    :ets.delete(:eb_missing_subscriber_warnings, :other_throttled_topic)
+
+    try do
+      logs =
+        capture_log(fn ->
+          for id <- 1..3 do
+            Notification.notify(%Event{
+              id: id,
+              topic: :throttled_topic,
+              data: nil
+            })
+          end
+
+          Notification.notify(%Event{
+            id: 1,
+            topic: :other_throttled_topic,
+            data: nil
+          })
+        end)
+
+      assert length(String.split(logs, ":throttled_topic is not registered")) ==
+               2
+
+      assert logs =~ ":other_throttled_topic is not registered"
+    after
+      Application.put_env(:event_bus, :missing_subscribers_warning_interval, 0)
+    end
+  end
 end

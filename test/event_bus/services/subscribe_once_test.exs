@@ -295,9 +295,9 @@ defmodule EventBus.Service.SubscribeOnceTest do
 
     assert Process.whereis(SubscriptionManager) == manager
 
-    assert MapSet.new([{OnceSubscriber, nil}]) ==
-             SubscriptionManager.limited_subscribers()
-
+    limited = SubscriptionManager.limited_subscribers()
+    assert {OnceSubscriber, nil} in limited
+    refute {CountingSubscriber, nil} in limited
     refute EventBus.subscribed?({CountingSubscriber, ["subscribe_once_topic"]})
   end
 
@@ -387,5 +387,81 @@ defmodule EventBus.Service.SubscribeOnceTest do
     Process.sleep(100)
 
     assert [] == EventBus.subscribers()
+  end
+
+  test "duplicate notify of an in-flight event is dropped without leaking budget" do
+    Application.put_env(:event_bus, :subscribe_once_test_pid, self())
+
+    EventBus.subscribe_n(
+      {DelayedCompletionSubscriber, ["subscribe_once_topic"]},
+      2
+    )
+
+    event = %Event{id: "dup-1", topic: @topic, data: %{}}
+    EventBus.Service.Notification.notify(event)
+    assert_receive {:spawned_waiter, "dup-1", waiter}
+
+    log = capture_log(fn -> EventBus.Service.Notification.notify(event) end)
+    assert log =~ "already being dispatched"
+    refute_receive {:spawned_waiter, "dup-1", _}, 50
+
+    send(waiter, :complete)
+    Process.sleep(50)
+
+    # Once completed, the same id can be notified again and spends the last unit.
+    EventBus.Service.Notification.notify(event)
+    assert_receive {:spawned_waiter, "dup-1", waiter}
+    send(waiter, :complete)
+    Process.sleep(100)
+
+    assert [] == EventBus.subscribers()
+  end
+
+  test "limited budgets and in-flight reservations survive a manager restart" do
+    Application.put_env(:event_bus, :subscribe_once_test_pid, self())
+
+    EventBus.subscribe_n(
+      {DelayedCompletionSubscriber, ["subscribe_once_topic"]},
+      2
+    )
+
+    EventBus.Service.Notification.notify(%Event{
+      id: "rs-1",
+      topic: @topic,
+      data: %{}
+    })
+
+    assert_receive {:spawned_waiter, "rs-1", waiter}
+
+    manager = Process.whereis(SubscriptionManager)
+    ref = Process.monitor(manager)
+    Process.exit(manager, :kill)
+    assert_receive {:DOWN, ^ref, _, _, _}
+    wait_for_restart(manager)
+
+    send(waiter, :complete)
+
+    EventBus.Service.Notification.notify(%Event{
+      id: "rs-2",
+      topic: @topic,
+      data: %{}
+    })
+
+    assert_receive {:spawned_waiter, "rs-2", waiter}
+    send(waiter, :complete)
+    Process.sleep(100)
+
+    assert [] == EventBus.subscribers()
+  end
+
+  defp wait_for_restart(old_pid) do
+    case Process.whereis(SubscriptionManager) do
+      pid when is_pid(pid) and pid != old_pid ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        wait_for_restart(old_pid)
+    end
   end
 end
