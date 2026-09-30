@@ -16,6 +16,7 @@ This repository is a maintained and modernized fork of [otobus/event_bus](https:
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Usage](#usage)
+- [TTL and event expiration](#ttl-and-event-expiration)
 - [Debug mode](#debug-mode)
 - [Storage model](#storage-model)
 - [Documentation and ecosystem](#documentation-and-ecosystem)
@@ -401,6 +402,68 @@ See [`examples/`](examples/) for ready-to-use patterns:
 - [`examples/configured_subscriber.ex`](examples/configured_subscriber.ex) - configured subscribers with `{Module, config}`
 - [`examples/persistent_store_subscriber.ex`](examples/persistent_store_subscriber.ex) - persisting all events to a data store
 
+## TTL and event expiration
+
+EventBus stores events in ETS until every subscriber reaches a terminal state (`mark_as_completed` or `mark_as_skipped`). If a subscriber never completes — due to a bug, a crashed downstream process, or a forgotten `mark_as_completed` call — the event stays in memory indefinitely.
+
+To prevent unbounded memory growth, enable the built-in sweeper:
+
+```elixir
+config :event_bus,
+  event_ttl: 300_000,      # 5 minutes, in milliseconds
+  sweep_interval: 10_000   # 10 seconds (default)
+```
+
+When `event_ttl` is set, a background process periodically scans the event store and removes events older than the TTL. The age is measured from the bus-owned insertion timestamp, not from user-provided event fields.
+
+Configuration:
+
+- `:event_ttl` — maximum event age in milliseconds. `nil` (default) disables the sweeper entirely. Typical values: `60_000` (1 min) for real-time systems, `300_000` (5 min) for general use, `900_000` (15 min) for batch workloads.
+- `:sweep_interval` — how often the sweeper runs, in milliseconds. Defaults to `10_000` (10 seconds).
+- `:sweep_strategy` — `:bulk_smart` (default), `:detailed`, or a module implementing `EventBus.SweepStrategy`. See below.
+- `:sweep_batch_size` — number of events per ETS cursor chunk. Defaults to `100`. Increase for high-throughput systems with large expiration backlogs.
+
+The sweeper never touches events that are still within their TTL, and it does not interfere with normal completion — if all subscribers finish before the TTL, the event is cleaned up immediately as usual.
+
+### Sweep strategies
+
+**`:bulk_smart`** (default) — optimized for throughput. Events are expired in batches (default 100, configurable via `:sweep_batch_size`) using ETS cursors, so memory stays constant. When no limited subscriptions (`subscribe_once`/`subscribe_n`) exist, the batch is pure ETS deletes with zero GenServer calls. When limited subscriptions are present, only those subscribers incur per-subscriber lookups, and all limit decrements are batched into a single GenServer call. Emits one `[:event_bus, :sweep, :cycle]` telemetry event per sweep with per-topic counts.
+
+**`:detailed`** — each expired event is processed individually with full subscriber accounting and its own telemetry event. Useful when you need per-event expiration visibility (e.g., routing expired events to a dead letter topic or alerting on specific event IDs). Slower under high expiration volume.
+
+```elixir
+config :event_bus,
+  event_ttl: 300_000,
+  sweep_strategy: :detailed
+```
+
+**Custom strategies** — implement the `EventBus.SweepStrategy` behaviour to define your own expiration logic (e.g., dead letter routing, custom metrics, external persistence):
+
+```elixir
+config :event_bus,
+  event_ttl: 300_000,
+  sweep_strategy: MyApp.CustomSweepStrategy
+```
+
+See [`CUSTOM_SWEEPERS.md`](CUSTOM_SWEEPERS.md) for a full guide on writing custom strategies, including runtime architecture, cleanup invariants, and a complete example.
+
+### Telemetry
+
+All strategies emit when at least one event is expired:
+
+- `[:event_bus, :sweep, :cycle]` — measurements: `%{expired_count, duration}`, metadata provided by the strategy's `telemetry_metadata/1` callback. For `:bulk_smart` this includes `%{expired_per_topic: %{topic => count}}`. Not emitted for zero-expiration cycles.
+
+The `:detailed` strategy additionally emits per expired event:
+
+- `[:event_bus, :sweep, :expired]` — measurements: `%{age: native_time}`, metadata: `%{topic, event_id, pending_subscribers}`.
+
+### Inspecting event age
+
+```elixir
+EventBus.fetch_event_metadata({:my_topic, "evt-1"})
+# => %{inserted_at: -576460751528736} (monotonic time, native units)
+```
+
 ## Debug mode
 
 Enable debug logging:
@@ -431,32 +494,11 @@ Subscriber durations are measured from dispatch until the subscriber reaches a t
 
 ## Storage model
 
-EventBus uses ETS tables shared across all topics:
-
-| Table | Purpose |
-| --- | --- |
-| `:eb_event_store` | Stores event structs keyed by `{topic, id}` |
-| `:eb_event_watchers` | Tracks subscriber lists and remaining count per event |
-| `:eb_event_watcher_status` | Tracks per-subscriber terminal state |
-| `:eb_event_subscription_generations` | Stores the subscription generation snapshot per event |
-| `:eb_topics` | Stores registered topic names |
-| `:eb_subscribers` | Stores subscriber-to-pattern mappings |
-| `:eb_topic_subscribers` | Stores the precomputed topic-to-subscriber index |
-| `:eb_subscription_opts` | Stores priority, guard, and generation per subscriber |
-
-When every subscriber for an event reaches a terminal state, the event store entry and observation state are cleaned up automatically.
-
-To inspect in-flight events manually:
-
-```elixir
-:ets.tab2list(:eb_event_watchers)
-> [{{topic, id}, subscribers, pending_count}, ...]
-
-:ets.lookup(:eb_event_watcher_status, {topic, id, subscriber})
-> [{{topic, id, subscriber}, :pending}]
-```
+EventBus uses ETS tables shared across all topics. When every subscriber for an event reaches a terminal state (`mark_as_completed` or `mark_as_skipped`), the event and its observation state are cleaned up automatically.
 
 ETS is not durable storage. If you need persistence, subscribe a consumer to `[".*"]` and write the fetched events to your database or message archive.
+
+For details on the internal table layout — including table names, GenServer responsibilities, and cleanup invariants — see [`CUSTOM_SWEEPERS.md`](CUSTOM_SWEEPERS.md).
 
 ## Documentation and ecosystem
 

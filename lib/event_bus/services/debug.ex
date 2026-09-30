@@ -5,22 +5,30 @@ defmodule EventBus.Service.Debug do
 
   @app :event_bus
   @dispatch_table :eb_dispatch_metadata
+  @enabled_key {__MODULE__, :enabled}
 
   @doc false
   @spec enabled?() :: boolean()
-  def enabled? do
-    Application.get_env(@app, :debug, false) == true
+  def enabled?() do
+    :persistent_term.get(@enabled_key, false)
   end
 
   @doc false
   @spec toggle(boolean()) :: :ok
   def toggle(enabled) when is_boolean(enabled) do
     Application.put_env(@app, :debug, enabled, persistent: true)
+    apply_enabled(enabled)
+  end
+
+  defp apply_enabled(enabled) do
+    if enabled?() != enabled, do: :persistent_term.put(@enabled_key, enabled)
 
     if enabled do
       Logger.put_module_level(__MODULE__, :debug)
     else
       Logger.delete_module_level(__MODULE__)
+      # Entries are only cleared while enabled; drop in-flight ones now.
+      :ets.delete_all_objects(@dispatch_table)
     end
 
     :ok
@@ -39,14 +47,17 @@ defmodule EventBus.Service.Debug do
       ])
     end
 
-    :ok
+    apply_enabled(Application.get_env(@app, :debug, false) == true)
   end
 
   @doc false
   @spec record_dispatch(term(), atom(), term()) :: :ok
   def record_dispatch(subscriber, topic, id) do
     if enabled?() do
-      :ets.insert(@dispatch_table, {{subscriber, topic, id}, System.monotonic_time()})
+      :ets.insert(
+        @dispatch_table,
+        {{subscriber, topic, id}, System.monotonic_time()}
+      )
     end
 
     :ok
@@ -69,15 +80,28 @@ defmodule EventBus.Service.Debug do
   end
 
   @doc false
-  @spec clean_dispatch_metadata(atom(), term()) :: :ok
-  def clean_dispatch_metadata(topic, id) do
-    :ets.match_delete(@dispatch_table, {{:_, topic, id}, :_})
+  @spec clean_dispatch_metadata([EventBus.subscriber()], atom(), term()) :: :ok
+  def clean_dispatch_metadata(subscribers, topic, id) do
+    if enabled?() do
+      Enum.each(subscribers, fn sub ->
+        :ets.delete(@dispatch_table, {sub, topic, id})
+      end)
+    end
+
     :ok
   end
 
   @doc false
-  @spec log(String.t()) :: :ok
-  def log(message) do
+  @spec log((-> String.t()) | String.t()) :: :ok
+  def log(message_fun) when is_function(message_fun, 0) do
+    if enabled?() do
+      Logger.debug("[EventBus] #{message_fun.()}")
+    end
+
+    :ok
+  end
+
+  def log(message) when is_binary(message) do
     if enabled?() do
       Logger.debug("[EventBus] #{message}")
     end
@@ -92,11 +116,12 @@ defmodule EventBus.Service.Debug do
       duration_str =
         case fetch_and_clear_dispatch_time(subscriber, topic, id) do
           {:ok, start_time} ->
-            duration_us = System.convert_time_unit(
-              System.monotonic_time() - start_time,
-              :native,
-              :microsecond
-            )
+            duration_us =
+              System.convert_time_unit(
+                System.monotonic_time() - start_time,
+                :native,
+                :microsecond
+              )
 
             " duration=#{format_duration(duration_us)}"
 

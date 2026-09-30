@@ -7,4 +7,5 @@ config :event_bus,
   topics: [:metrics_received, :metrics_summed],
   ttl: 30_000_000,
   time_unit: :microsecond,
-  id_generator: EventBus.Util.Base62
+  id_generator: EventBus.Util.Base62,
+  missing_subscribers_warning_interval: 0

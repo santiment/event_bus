@@ -26,13 +26,20 @@ defmodule EventBus.Service.NotificationTest do
     source: "NotificationTest"
   }
 
+  @config_topics Application.compile_env(:event_bus, :topics, [])
+
   setup do
-    for topic <- EventBus.topics() do
+    for topic <- EventBus.topics() -- @config_topics do
       EventBus.unregister_topic(topic)
     end
 
     for {subscriber, _} <- EventBus.subscribers() do
       EventBus.unsubscribe(subscriber)
+    end
+
+    # Re-register config topics in case a prior test removed them
+    for topic <- @config_topics do
+      EventBus.register_topic(topic)
     end
 
     :ok
@@ -93,5 +100,97 @@ defmodule EventBus.Service.NotificationTest do
              logs,
              "Topic :metrics_received doesn't have subscribers"
            )
+  end
+
+  defmodule Thrower do
+    def process({_topic, _id}), do: throw(:kaboom)
+  end
+
+  defmodule Exiter do
+    def process({_topic, _id}), do: exit(:kaboom)
+  end
+
+  defmodule AfterCrash do
+    def process({topic, id}) do
+      send(:notification_crash_test, {:processed, id})
+      EventBus.mark_as_completed({__MODULE__, {topic, id}})
+    end
+  end
+
+  test "throw/exit from a subscriber does not kill the dispatch chain" do
+    Process.register(self(), :notification_crash_test)
+    EventBus.register_topic(:metrics_received)
+
+    # Higher priorities run first — both crash before AfterCrash runs.
+    EventBus.subscribe({Thrower, ["metrics_received$"]}, priority: 10)
+    EventBus.subscribe({Exiter, ["metrics_received$"]}, priority: 5)
+    EventBus.subscribe({AfterCrash, ["metrics_received$"]})
+
+    logs =
+      capture_log(fn ->
+        Notification.notify(@event)
+        assert_received {:processed, "E1"}
+
+        # Crashed subscribers are marked skipped, AfterCrash completed —
+        # the event must be fully cleaned up, not stranded as pending.
+        assert is_nil(EventBus.fetch_event({@topic, "E1"}))
+      end)
+
+    assert logs =~ "Thrower.process/1 raised an error!"
+    assert logs =~ "Exiter.process/1 raised an error!"
+  end
+
+  test "notify for unregistered topic warns differently" do
+    event = %Event{
+      id: "E2",
+      topic: :completely_unknown_topic,
+      data: %{test: true}
+    }
+
+    logs =
+      capture_log(fn ->
+        Notification.notify(event)
+        Process.sleep(100)
+      end)
+
+    assert logs =~ "completely_unknown_topic"
+    assert logs =~ "is not registered and has no subscribers"
+  end
+
+  test "missing-subscriber warnings are throttled per topic" do
+    Application.put_env(
+      :event_bus,
+      :missing_subscribers_warning_interval,
+      60_000
+    )
+
+    :ets.delete(:eb_missing_subscriber_warnings, :throttled_topic)
+    :ets.delete(:eb_missing_subscriber_warnings, :other_throttled_topic)
+
+    try do
+      logs =
+        capture_log(fn ->
+          for id <- 1..3 do
+            Notification.notify(%Event{
+              id: id,
+              topic: :throttled_topic,
+              data: nil
+            })
+          end
+
+          Notification.notify(%Event{
+            id: 1,
+            topic: :other_throttled_topic,
+            data: nil
+          })
+        end)
+
+      assert length(String.split(logs, ":throttled_topic is not registered")) ==
+               2
+
+      assert logs =~ ":other_throttled_topic is not registered"
+    after
+      Application.put_env(:event_bus, :missing_subscribers_warning_interval, 0)
+    end
   end
 end

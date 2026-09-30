@@ -10,7 +10,13 @@ defmodule EventBus.Service.Store do
   @typep topic :: EventBus.topic()
 
   @table :eb_event_store
-  @table_opts [:set, :public, :named_table, {:read_concurrency, true}]
+  @table_opts [
+    :set,
+    :public,
+    :named_table,
+    {:read_concurrency, true},
+    {:write_concurrency, true}
+  ]
 
   @doc false
   @spec setup_table() :: :ok
@@ -77,6 +83,49 @@ defmodule EventBus.Service.Store do
   def delete({topic, id}) do
     :ets.delete(@table, {topic, id})
     :ok
+  end
+
+  @doc false
+  @spec expired_match_spec(integer()) :: :ets.match_spec()
+  defp expired_match_spec(cutoff) do
+    [
+      {{{:"$1", :"$2"}, :_, %{inserted_at: :"$3"}}, [{:<, :"$3", cutoff}],
+       [{{:"$1", :"$2", :"$3"}}]}
+    ]
+  end
+
+  @doc """
+  Begin a cursor-based scan for events older than `cutoff`.
+
+  Returns `{batch, continuation}` or `:done`. Each batch element is a
+  3-tuple `{topic, id, inserted_at}`. Call `continue_expired/1` with the
+  continuation to fetch the next batch.
+  """
+  @spec select_expired(integer(), pos_integer()) ::
+          {[{atom(), term(), integer()}], term()} | :done
+  def select_expired(cutoff, batch_size) do
+    wrap_select_result(
+      :ets.select(@table, expired_match_spec(cutoff), batch_size)
+    )
+  end
+
+  @doc """
+  Continue a cursor-based expired-event scan started by `select_expired/2`.
+  """
+  @spec continue_expired(term()) ::
+          {[{atom(), term(), integer()}], term()} | :done
+  def continue_expired(continuation) do
+    wrap_select_result(:ets.select(continuation))
+  end
+
+  defp wrap_select_result(:"$end_of_table"), do: :done
+  defp wrap_select_result({results, continuation}), do: {results, continuation}
+
+  @doc false
+  @spec find_expired(integer()) :: [{event_shadow(), integer()}]
+  def find_expired(cutoff) do
+    :ets.select(@table, expired_match_spec(cutoff))
+    |> Enum.map(fn {topic, id, inserted_at} -> {{topic, id}, inserted_at} end)
   end
 
   @doc false

@@ -1,64 +1,82 @@
 defmodule EventBusTest do
   use ExUnit.Case, async: false
 
-  import ExUnit.CaptureLog
-
   alias EventBus.Model.Event
-  alias EventBus.Service.Notification
+  alias EventBus.Service.Observation
 
-  alias EventBus.Support.Helper.{
-    BadOne,
-    Calculator,
-    InputLogger,
-    MemoryLeakerOne
-  }
-
-  @event %Event{
-    id: "M1",
-    transaction_id: "T1",
-    data: [1, 7],
-    topic: :metrics_received,
-    source: "EventBusTest"
-  }
+  @topic :event_bus_facade_topic
 
   setup do
-    EventBus.register_topic(:metrics_received)
-    EventBus.register_topic(:metrics_summed)
-
-    for {subscriber, _topics} <- EventBus.subscribers() do
-      EventBus.unsubscribe(subscriber)
-    end
-
+    EventBus.register_topic(@topic)
+    on_exit(fn -> EventBus.unregister_topic(@topic) end)
     :ok
   end
 
-  test "notify" do
-    EventBus.subscribe({{InputLogger, %{}}, [".*"]})
-    EventBus.subscribe({{BadOne, %{}}, [".*"]})
-    EventBus.subscribe({{Calculator, %{}}, ["metrics_received"]})
-    EventBus.subscribe({{MemoryLeakerOne, %{}}, [".*"]})
+  defmodule Forwarder do
+    def process({topic, id}) do
+      send(
+        :persistent_term.get({__MODULE__, :pid}),
+        {:got, EventBus.fetch_event({topic, id})}
+      )
 
-    Logger.put_module_level(InputLogger, :info)
+      EventBus.mark_as_completed({__MODULE__, {topic, id}})
+    end
+  end
 
-    logs =
-      capture_log(fn ->
-        Notification.notify(@event)
+  defp observe(id, subscriber) do
+    Observation.save({@topic, id}, {[subscriber, {Forwarder, :other}], [], []})
+  end
 
-        # Wait for follow-up async work (nested notify / GenServer.cast) to finish.
-        Process.sleep(300)
-      end)
+  describe "mark_as_completed/1 and mark_as_skipped/1" do
+    test "accept {subscriber, {topic, id}} and {subscriber, topic, id}" do
+      configured = {Forwarder, %{k: 1}}
 
-    Logger.delete_module_level(InputLogger)
+      cases = [
+        {"c1", {Forwarder, nil}, &EventBus.mark_as_completed/1,
+         {Forwarder, {@topic, "c1"}}, 1},
+        {"c2", {Forwarder, nil}, &EventBus.mark_as_completed/1,
+         {Forwarder, @topic, "c2"}, 1},
+        {"c3", configured, &EventBus.mark_as_completed/1,
+         {configured, {@topic, "c3"}}, 1},
+        {"c4", configured, &EventBus.mark_as_completed/1,
+         {configured, @topic, "c4"}, 1},
+        {"s1", {Forwarder, nil}, &EventBus.mark_as_skipped/1,
+         {Forwarder, {@topic, "s1"}}, 2},
+        {"s2", {Forwarder, nil}, &EventBus.mark_as_skipped/1,
+         {Forwarder, @topic, "s2"}, 2},
+        {"s3", configured, &EventBus.mark_as_skipped/1,
+         {configured, {@topic, "s3"}}, 2},
+        {"s4", configured, &EventBus.mark_as_skipped/1,
+         {configured, @topic, "s4"}, 2}
+      ]
 
-    assert String.contains?(logs, "BadOne.process/1 raised an error!")
+      for {id, subscriber, mark, ref, terminal_index} <- cases do
+        observe(id, subscriber)
+        assert :ok == mark.(ref)
 
-    assert String.contains?(logs, "Event log for %EventBus.Model.Event{")
-    assert String.contains?(logs, "id: \"M1\"")
-    assert String.contains?(logs, "data: [1, 7]")
-    assert String.contains?(logs, "topic: :metrics_received")
+        assert [subscriber] ==
+                 elem(Observation.fetch({@topic, id}), terminal_index),
+               "#{inspect(ref)} did not reach the expected terminal state"
+      end
+    end
+  end
 
-    assert String.contains?(logs, "id: \"E123\"")
-    assert String.contains?(logs, "data: {8, [1, 7]}")
-    assert String.contains?(logs, "topic: :metrics_summed")
+  test "notify/1 dispatches asynchronously and the event can be fetched" do
+    :persistent_term.put({Forwarder, :pid}, self())
+    EventBus.subscribe({Forwarder, ["event_bus_facade_topic"]})
+
+    try do
+      assert :ok ==
+               EventBus.notify(%Event{
+                 id: "async-1",
+                 topic: @topic,
+                 data: :payload
+               })
+
+      assert_receive {:got, %Event{id: "async-1", data: :payload}}, 1_000
+    after
+      EventBus.unsubscribe(Forwarder)
+      :persistent_term.erase({Forwarder, :pid})
+    end
   end
 end

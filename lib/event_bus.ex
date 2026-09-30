@@ -336,6 +336,23 @@ defmodule EventBus do
     as: :fetch_data
 
   @doc """
+  Fetch an event's internal metadata.
+
+  Returns the bus-owned metadata map (e.g. `%{inserted_at: integer()}`) or `nil`
+  if the event is not in the store. Useful for inspecting event age.
+
+  ## Examples
+
+      EventBus.fetch_event_metadata({:hello_received, "123"})
+      %{inserted_at: -576460752303423488}
+
+  """
+  @spec fetch_event_metadata(event_shadow()) :: map() | nil
+  defdelegate fetch_event_metadata(event_shadow),
+    to: StoreService,
+    as: :fetch_metadata
+
+  @doc """
   Mark the event as completed for the subscriber.
 
   ## Examples
@@ -357,10 +374,16 @@ defmodule EventBus do
   """
   @spec mark_as_completed(subscriber_with_event_ref()) :: :ok
   def mark_as_completed({subscriber, {topic, id}}),
-    do: ObservationService.mark_as_completed({normalize_subscriber(subscriber), {topic, id}})
+    do:
+      ObservationService.mark_as_completed(
+        {normalize_subscriber(subscriber), {topic, id}}
+      )
 
   def mark_as_completed({subscriber, topic, id}),
-    do: ObservationService.mark_as_completed({normalize_subscriber(subscriber), {topic, id}})
+    do:
+      ObservationService.mark_as_completed(
+        {normalize_subscriber(subscriber), {topic, id}}
+      )
 
   @doc """
   Mark the event as skipped for the subscriber.
@@ -378,10 +401,16 @@ defmodule EventBus do
   """
   @spec mark_as_skipped(subscriber_with_event_ref()) :: :ok
   def mark_as_skipped({subscriber, {topic, id}}),
-    do: ObservationService.mark_as_skipped({normalize_subscriber(subscriber), {topic, id}})
+    do:
+      ObservationService.mark_as_skipped(
+        {normalize_subscriber(subscriber), {topic, id}}
+      )
 
   def mark_as_skipped({subscriber, topic, id}),
-    do: ObservationService.mark_as_skipped({normalize_subscriber(subscriber), {topic, id}})
+    do:
+      ObservationService.mark_as_skipped(
+        {normalize_subscriber(subscriber), {topic, id}}
+      )
 
   @doc """
   Toggle debug mode on or off.
@@ -403,6 +432,8 @@ defmodule EventBus do
     to: Debug,
     as: :toggle
 
-  defp normalize_subscriber(subscriber) when is_atom(subscriber), do: {subscriber, nil}
+  defp normalize_subscriber(subscriber) when is_atom(subscriber),
+    do: {subscriber, nil}
+
   defp normalize_subscriber({_module, _config} = subscriber), do: subscriber
 end

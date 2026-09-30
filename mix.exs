@@ -37,7 +37,8 @@ defmodule EventBus.MixProject do
   defp deps do
     [
       {:telemetry, "~> 0.4 or ~> 1.0", optional: true},
-      {:ex_doc, "~> 0.34", only: [:dev], runtime: false}
+      {:ex_doc, "~> 0.34", only: [:dev], runtime: false},
+      {:excoveralls, "~> 0.18", only: :test, runtime: false}
     ]
   end
 
@@ -52,7 +53,14 @@ defmodule EventBus.MixProject do
     [
       name: :event_bus,
       description: description(),
-      files: ["lib", "mix.exs", "README.md", "CHANGELOG.md", "LICENSE.md"],
+      files: [
+        "lib",
+        "mix.exs",
+        "README.md",
+        "CHANGELOG.md",
+        "CUSTOM_SWEEPERS.md",
+        "LICENSE.md"
+      ],
       maintainers: ["Mustafa Turan"],
       licenses: ["MIT"],
       links: %{
@@ -68,8 +76,8 @@ defmodule EventBus.MixProject do
         "CHANGELOG.md": [title: "Changelog"],
         "CONTRIBUTING.md": [title: "Contributing"],
         "CODE_OF_CONDUCT.md": [title: "Code of Conduct"],
+        "CUSTOM_SWEEPERS.md": [title: "Custom Sweep Strategies"],
         "LICENSE.md": [title: "License"],
-        "QUESTIONS.md": [title: "Questions"],
         "README.md": [title: "Overview"]
       ],
       main: "readme",

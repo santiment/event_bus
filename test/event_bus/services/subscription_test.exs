@@ -124,8 +124,11 @@ defmodule EventBus.Service.SubscriptionTest do
   test "subscribers with event type and without config" do
     Subscription.subscribe({AnotherCalculator, [".*"]})
 
-    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_received)
-    assert [{AnotherCalculator, nil}] == Subscription.subscribers(:metrics_summed)
+    assert [{AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_received)
+
+    assert [{AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_summed)
   end
 
   test "state is stored in ETS tables" do
@@ -161,5 +164,63 @@ defmodule EventBus.Service.SubscriptionTest do
     opts = EventBus.Manager.Subscription.fetch_opts({AnotherCalculator, nil})
     assert opts.priority == 7
     assert is_function(opts.guard, 1)
+  end
+
+  test "fetch_opts returns defaults for unknown subscriber" do
+    opts = EventBus.Manager.Subscription.fetch_opts({UnknownModule, nil})
+    assert opts == %{priority: 0, guard: nil}
+  end
+
+  test "topic map is pre-sorted by priority and re-sorted on resubscribe" do
+    EventBus.subscribe({{InputLogger, %{}}, ["metrics_received"]}, priority: 1)
+
+    EventBus.subscribe({AnotherCalculator, ["metrics_received"]}, priority: 5)
+
+    assert [{AnotherCalculator, nil}, {InputLogger, %{}}] ==
+             Subscription.subscribers(:metrics_received)
+
+    pairs = Subscription.subscribers_with_opts(:metrics_received)
+    assert [{{AnotherCalculator, nil}, %{priority: 5}}, _] = pairs
+
+    # Resubscribe with a new priority must re-sort the cached list.
+    EventBus.subscribe({AnotherCalculator, ["metrics_received"]}, priority: -1)
+
+    assert [{InputLogger, %{}}, {AnotherCalculator, nil}] ==
+             Subscription.subscribers(:metrics_received)
+  end
+
+  test "subscribe with non-integer priority raises ArgumentError" do
+    assert_raise ArgumentError, ":priority must be an integer", fn ->
+      EventBus.subscribe({{InputLogger, %{}}, [".*"]}, priority: "high")
+    end
+  end
+
+  test "subscribe with invalid guard raises ArgumentError" do
+    assert_raise ArgumentError, ":guard must be a 1-arity function", fn ->
+      EventBus.subscribe({{InputLogger, %{}}, [".*"]},
+        guard: "not_a_function"
+      )
+    end
+  end
+
+  test "invalid topic patterns raise without crashing the manager" do
+    manager = Process.whereis(EventBus.Manager.Subscription)
+
+    for patterns <- ["metrics_received", nil, [~r/metrics/], [1]] do
+      for subscribe <- [
+            fn -> EventBus.subscribe({InputLogger, patterns}) end,
+            fn -> EventBus.subscribe({InputLogger, patterns}, priority: 1) end,
+            fn -> EventBus.subscribe_n({InputLogger, patterns}, 1) end
+          ] do
+        assert_raise ArgumentError, ~r/topic patterns must be a list/, subscribe
+      end
+    end
+
+    # A bad row in the subscribers table would crash every later register.
+    EventBus.register_topic(:after_invalid_patterns)
+    EventBus.unregister_topic(:after_invalid_patterns)
+
+    assert Process.whereis(EventBus.Manager.Subscription) == manager
+    assert [] == Subscription.subscribers()
   end
 end

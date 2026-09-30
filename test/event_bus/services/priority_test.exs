@@ -73,39 +73,28 @@ defmodule EventBus.Service.PriorityTest do
     end
   end
 
+  defmodule OnceAfterCancel do
+    def process({topic, id}) do
+      send(:priority_test, {:processed, :once, id})
+      EventBus.mark_as_completed({__MODULE__, {topic, id}})
+    end
+  end
+
   defp notify_and_wait(id) do
     event = %Event{id: id, topic: @topic, data: %{}}
     EventBus.notify(event)
     Process.sleep(200)
   end
 
-  test "subscribers are dispatched in priority order" do
+  test "subscribers are dispatched in priority order (default is 0)" do
     Process.register(self(), :priority_test)
 
-    # Subscribe in reverse priority order
+    # Subscribe in reverse priority order; MedPriority uses default (0)
     EventBus.subscribe({LowPriority, ["priority_test_topic"]}, priority: -10)
     EventBus.subscribe({HighPriority, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({MedPriority, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({MedPriority, ["priority_test_topic"]})
 
     notify_and_wait("prio-1")
-
-    assert_received {:processed, :high, t1}
-    assert_received {:processed, :med, t2}
-    assert_received {:processed, :low, t3}
-
-    assert t1 <= t2
-    assert t2 <= t3
-  end
-
-  test "default priority is 0" do
-    Process.register(self(), :priority_test)
-
-    EventBus.subscribe({LowPriority, ["priority_test_topic"]}, priority: -10)
-    # No priority specified - defaults to 0
-    EventBus.subscribe({MedPriority, ["priority_test_topic"]})
-    EventBus.subscribe({HighPriority, ["priority_test_topic"]}, priority: 10)
-
-    notify_and_wait("prio-default-1")
 
     assert_received {:processed, :high, t1}
     assert_received {:processed, :med, t2}
@@ -136,8 +125,13 @@ defmodule EventBus.Service.PriorityTest do
   test "cancellation via return value stops propagation" do
     Process.register(self(), :priority_test)
 
-    EventBus.subscribe({CancellingSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({CancellingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     notify_and_wait("cancel-return-1")
 
@@ -151,11 +145,47 @@ defmodule EventBus.Service.PriorityTest do
     end)
   end
 
+  test "cancellation does not spend a limited subscriber's budget" do
+    Process.register(self(), :priority_test)
+
+    # High-priority canceller skips every event before it reaches OnceAfterCancel.
+    EventBus.subscribe({CancellingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe_once({OnceAfterCancel, ["priority_test_topic"]})
+
+    notify_and_wait("limited-cancel-1")
+
+    # The once-subscriber never received the event, so it must still be
+    # subscribed — a pre-delivery cancel must not burn the once budget.
+    assert_received {:processed, :canceller}
+    refute_received {:processed, :once, _}
+
+    assert {{OnceAfterCancel, nil}, _} =
+             List.keyfind(EventBus.subscribers(), {OnceAfterCancel, nil}, 0)
+
+    # Remove the canceller; the once-subscriber should now actually receive its
+    # one event and only then auto-unsubscribe.
+    EventBus.unsubscribe(CancellingSubscriber)
+
+    notify_and_wait("limited-cancel-2")
+    assert_received {:processed, :once, "limited-cancel-2"}
+
+    Process.sleep(100)
+    refute List.keyfind(EventBus.subscribers(), {OnceAfterCancel, nil}, 0)
+  end
+
   test "return-value cancellation cleans up even without explicit completion" do
     Process.register(self(), :priority_test)
 
-    EventBus.subscribe({ImplicitCancellingSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({ImplicitCancellingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     notify_and_wait("cancel-return-implicit-1")
 
@@ -171,8 +201,13 @@ defmodule EventBus.Service.PriorityTest do
   test "cancellation via CancelEvent exception stops propagation" do
     Process.register(self(), :priority_test)
 
-    EventBus.subscribe({CancelRaisingSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({CancelRaisingSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     capture_log(fn ->
       notify_and_wait("cancel-raise-1")
@@ -196,8 +231,13 @@ defmodule EventBus.Service.PriorityTest do
       end
     end
 
-    EventBus.subscribe({RegularErrorSubscriber, ["priority_test_topic"]}, priority: 100)
-    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]}, priority: 0)
+    EventBus.subscribe({RegularErrorSubscriber, ["priority_test_topic"]},
+      priority: 100
+    )
+
+    EventBus.subscribe({AfterCancelSubscriber, ["priority_test_topic"]},
+      priority: 0
+    )
 
     capture_log(fn ->
       notify_and_wait("no-cancel-error-1")
